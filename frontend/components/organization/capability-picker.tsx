@@ -4,6 +4,7 @@ import { useMemo } from "react"
 
 import { Checkbox } from "@/components/ui/checkbox"
 import { Label } from "@/components/ui/label"
+import { InfoTip } from "@/components/ui/info-tip"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import type { CapabilityGroup } from "@/types/organization"
 
@@ -94,9 +95,9 @@ export function CapabilityPicker({
 
   if (catalog.length === 0) {
     return (
-      <p className="text-sm text-muted-foreground">
-        This organization has no approved roles yet, so there is nothing to grant. Permissions appear here once a role
-        request is approved.
+      <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
+        This organization has no approved roles yet, so there is nothing to grant.
+        <InfoTip>Permissions appear here once a role request is approved.</InfoTip>
       </p>
     )
   }
@@ -143,8 +144,10 @@ export function CapabilityPicker({
                       onCheckedChange={(checked) => toggle(capability.key, checked === true)}
                     />
                     <span className="min-w-0">
-                      <span className="block text-sm font-medium text-black dark:text-white">{capability.label}</span>
-                      <span className="block text-xs text-muted-foreground">{capability.hint}</span>
+                      <span className="flex items-center gap-1.5 text-sm font-medium text-black dark:text-white">
+                        {capability.label}
+                        {capability.hint ? <InfoTip>{capability.hint}</InfoTip> : null}
+                      </span>
                     </span>
                   </label>
                 ))}

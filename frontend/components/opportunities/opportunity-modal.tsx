@@ -77,7 +77,7 @@ export function OpportunityModal({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="relative h-64 w-full my-4">
+        <div className="relative h-64 w-full">
           <Image
             src={opportunity.imageUrl || "/placeholder.svg?height=300&width=600"}
             alt={opportunity.title}
@@ -86,7 +86,7 @@ export function OpportunityModal({
           />
         </div>
 
-        <div className="grid grid-cols-2 gap-4 mb-4">
+        <div className="grid grid-cols-2 gap-4">
           <div className="flex items-center text-gray-700 dark:text-gray-300">
             <CalendarClock className="h-5 w-5 mr-2 text-[#eb6c6c]" />
             <div>
@@ -135,7 +135,7 @@ export function OpportunityModal({
           </div>
         </div>
 
-        <div className="mb-6">
+        <div>
           <h3 className="text-lg font-medium mb-2 text-black dark:text-white">Description</h3>
           <p className="text-gray-700 dark:text-gray-300 whitespace-pre-line">{opportunity.description}</p>
         </div>

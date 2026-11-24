@@ -4,6 +4,7 @@ import { useSearchParams, useRouter } from "next/navigation"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { usePrivy } from "@privy-io/react-auth"
 import { Button } from "@/components/ui/button"
+import { InfoTip } from "@/components/ui/info-tip"
 import { BACKEND } from "@/lib/constants"
 import { useApp } from "@/context/AppProvider"
 import { useChainConfig } from "@/context/ChainConfigProvider"
@@ -176,7 +177,7 @@ const Page = () => {
   }, [sessionReady, privyReady, claim, login, markLoginPending, clearLoginPending])
 
   const Card = ({ children }: { children: React.ReactNode }) => (
-    <div className="mx-auto w-full max-w-md px-4 text-center">
+    <div className="mx-auto w-full max-w-md px-gutter text-center">
       <div className="rounded-lg border bg-card/95 p-6 shadow-sm">
         <img src="/icon.png" alt="SFLUV" className="mx-auto h-16 w-16 object-contain" />
         {children}
@@ -208,20 +209,19 @@ const Page = () => {
         </Card>
       ) : previewState === "none" ? (
         <Card>
-          <h2 className="mt-4 text-2xl font-bold text-black dark:text-white">Nothing to recover</h2>
+          <h2 className="mt-4 text-2xl font-bold text-black dark:text-white">
+            <span className="inline-flex items-center gap-1.5">
+              Nothing to recover
+              <InfoTip>This account has no recoverable SFLuv balance from the migration.</InfoTip>
+            </span>
+          </h2>
           {account && <p className="mt-2 text-xs text-muted-foreground">{shortAddress(account)}</p>}
-          <p className="mt-2 text-sm text-muted-foreground">
-            This account has no recoverable SFLuv balance from the migration.
-          </p>
           <ReturnToMap />
         </Card>
       ) : previewState === "claimed" && !claimed ? (
         <Card>
           <h2 className="mt-4 text-2xl font-bold text-black dark:text-white">Already claimed</h2>
           {account && <p className="mt-2 text-xs text-muted-foreground">{shortAddress(account)}</p>}
-          <p className="mt-2 text-sm text-muted-foreground">
-            This balance has already been recovered.
-          </p>
           <ReturnToMap />
         </Card>
       ) : claimed ? (

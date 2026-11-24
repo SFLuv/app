@@ -1,6 +1,7 @@
 "use client"
 
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { InfoTip } from "@/components/ui/info-tip"
 import { LocationPayoutCard } from "@/components/merchant/location-payout-card"
 import type { AuthedLocation } from "@/types/location"
 
@@ -20,13 +21,17 @@ interface UnwrapModalProps {
 export function UnwrapModal({ open, onOpenChange, location, onSuccess }: UnwrapModalProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-[560px]">
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-[560px]" aria-describedby={undefined}>
         <DialogHeader>
-          <DialogTitle className="text-black dark:text-white">Unwrap to your bank</DialogTitle>
-          <DialogDescription>
-            Turns SFLUV from this location back into dollars in the business bank account. Your first unwrap each
-            month is any amount; further unwraps that month must be at least $500.
-          </DialogDescription>
+          <DialogTitle className="text-black dark:text-white">
+            <span className="inline-flex items-center gap-1.5">
+              Unwrap to your bank
+              <InfoTip>
+                Turns SFLUV from this location back into dollars in the business bank account. Your first unwrap each
+                month is any amount; further unwraps that month must be at least $500.
+              </InfoTip>
+            </span>
+          </DialogTitle>
         </DialogHeader>
         <LocationPayoutCard location={location} onUnwrapped={onSuccess} />
       </DialogContent>

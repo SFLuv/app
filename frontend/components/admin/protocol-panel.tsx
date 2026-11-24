@@ -6,6 +6,7 @@ import { AlertTriangle, Check, Copy, KeyRound, Loader2, RefreshCw, ShieldCheck }
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { InfoTip } from "@/components/ui/info-tip"
 import {
   Dialog,
   DialogContent,
@@ -204,7 +205,7 @@ export function ProtocolPanel() {
     <div className="space-y-6">
       {data && !data.master_key_configured && (
         <Card className="border-destructive">
-          <CardHeader>
+          <CardHeader className="pb-card">
             <CardTitle className="flex items-center gap-2 text-destructive">
               <AlertTriangle className="h-5 w-5" />
               No encryption key is configured
@@ -224,11 +225,11 @@ export function ProtocolPanel() {
             <CardTitle className="flex items-center gap-2">
               <ShieldCheck className="h-5 w-5" />
               Protocol wallets
+              <InfoTip>
+                The wallets the backend signs with. Each one is a smart wallet whose address never changes; rotating a key
+                replaces the signer behind it, so nothing that refers to the address has to be updated.
+              </InfoTip>
             </CardTitle>
-            <CardDescription>
-              The wallets the backend signs with. Each one is a smart wallet whose address never changes; rotating a key
-              replaces the signer behind it, so nothing that refers to the address has to be updated.
-            </CardDescription>
           </div>
           <div className="flex items-center gap-2">
             <Button variant="outline" size="sm" onClick={() => void load()} disabled={rotating}>
@@ -250,8 +251,9 @@ export function ProtocolPanel() {
         </CardHeader>
         <CardContent className="space-y-4">
           {accounts.length === 0 && (
-            <p className="text-sm text-muted-foreground">
-              No protocol wallets are registered on this chain yet. They are created at startup.
+            <p className="flex items-center gap-2 text-sm text-muted-foreground">
+              No protocol wallets are registered on this chain yet.
+              <InfoTip>They are created at startup.</InfoTip>
             </p>
           )}
 
@@ -263,6 +265,7 @@ export function ProtocolPanel() {
                   <div className="min-w-0 space-y-1">
                     <div className="flex items-center gap-2">
                       <h3 className="font-semibold">{account.label}</h3>
+                      {account.description && <InfoTip>{account.description}</InfoTip>}
                       <Badge
                         variant={state.tone === "ok" ? "secondary" : "destructive"}
                         className={state.tone === "warn" ? "bg-amber-100 text-amber-900 hover:bg-amber-100" : ""}
@@ -270,7 +273,6 @@ export function ProtocolPanel() {
                         {state.label}
                       </Badge>
                     </div>
-                    <p className="max-w-prose text-sm text-muted-foreground">{account.description}</p>
                   </div>
                   {data?.can_rotate && (
                     <Button
@@ -356,13 +358,15 @@ export function ProtocolPanel() {
 
       {data?.cutover_complete && (
         <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Payouts go through the sponsored path</CardTitle>
-            <CardDescription>
-              Now that the balances are in these wallets, every payout is a sponsored transaction: the Citizen Wallet
-              engine submits it and the paymaster pays the gas. That means the paymaster is the one account still
-              needing CELO — and while the engine is unavailable, payouts stop rather than falling back.
-            </CardDescription>
+          <CardHeader className="pb-card">
+            <CardTitle className="flex items-center gap-2 text-base">
+              Payouts go through the sponsored path
+              <InfoTip>
+                Now that the balances are in these wallets, every payout is a sponsored transaction: the Citizen Wallet
+                engine submits it and the paymaster pays the gas. That means the paymaster is the one account still
+                needing CELO — and while the engine is unavailable, payouts stop rather than falling back.
+              </InfoTip>
+            </CardTitle>
           </CardHeader>
         </Card>
       )}
@@ -372,10 +376,10 @@ export function ProtocolPanel() {
       {(data?.steps?.length ?? 0) > 0 && (
         <Card>
           <CardHeader>
-            <CardTitle>Migration steps</CardTitle>
-            <CardDescription>
-              Each step records that it ran, so a restart or a second deploy cannot repeat one.
-            </CardDescription>
+            <CardTitle className="flex items-center gap-2">
+              Migration steps
+              <InfoTip>Each step records that it ran, so a restart or a second deploy cannot repeat one.</InfoTip>
+            </CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">
             {data?.steps.map((step) => (
@@ -469,11 +473,13 @@ function MigrationCard({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Finish the migration</CardTitle>
-        <CardDescription>
-          Two steps, in order. Deploying puts the wallets on chain and costs only gas. Moving the balances empties the
-          old accounts into them and cannot be undone — it spends with the keys that are being replaced.
-        </CardDescription>
+        <CardTitle className="flex items-center gap-2">
+          Finish the migration
+          <InfoTip>
+            Two steps, in order. Deploying puts the wallets on chain and costs only gas. Moving the balances empties the
+            old accounts into them and cannot be undone — it spends with the keys that are being replaced.
+          </InfoTip>
+        </CardTitle>
       </CardHeader>
       <CardContent className="flex flex-wrap gap-2">
         <Button variant="outline" onClick={() => setConfirming("deploy")} disabled={busy || allDeployed}>
@@ -564,11 +570,13 @@ function AddressHistoryCard({ history }: { history: ProtocolAddressWindow[] }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Address history</CardTitle>
-        <CardDescription>
-          Which address held each role, and when. Checks against past payments use the address that was in use at the
-          time, so replacing a wallet does not make older payments look missing.
-        </CardDescription>
+        <CardTitle className="flex items-center gap-2">
+          Address history
+          <InfoTip>
+            Which address held each role, and when. Checks against past payments use the address that was in use at the
+            time, so replacing a wallet does not make older payments look missing.
+          </InfoTip>
+        </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
         {byRole.map(([role, windows]) => (

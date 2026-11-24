@@ -112,7 +112,7 @@ export function MapMerchantPanel({
           collapsed ? "md:hidden" : "md:flex md:w-[17rem] lg:w-[19rem] xl:w-[21rem]",
         )}
       >
-        <div className="flex items-center gap-2 border-b border-border/60 p-2.5">
+        <div className="flex items-center gap-2 border-b border-border/60 p-3">
           <div className="relative flex-1">
             <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
             <Input
@@ -149,7 +149,7 @@ export function MapMerchantPanel({
                       onMouseEnter={() => onFocusLocation(location)}
                       onFocus={() => onFocusLocation(location)}
                       onClick={() => onSelectLocation(location)}
-                      className="flex w-full items-start gap-2.5 px-3 py-2.5 text-left transition-colors hover:bg-muted/60"
+                      className="flex w-full items-start gap-3 px-3 py-3 text-left transition-colors hover:bg-muted/60"
                     >
                       <div className="h-9 w-9 shrink-0 overflow-hidden rounded-lg border border-border/60">
                         <MerchantIcon name={location.name} iconUrl={location.icon_url} size={36} state={state} />

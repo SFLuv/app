@@ -17,7 +17,9 @@ const config = {
   theme: {
     container: {
       center: true,
-      padding: "2rem",
+      // The page shell (app/sidebar.tsx) already pads every page with the
+      // gutter; a container inside it adds no second edge.
+      padding: "0",
       screens: {
         "2xl": "1400px",
       },
@@ -67,6 +69,14 @@ const config = {
           border: "hsl(var(--sidebar-border))",
           ring: "hsl(var(--sidebar-ring))",
         },
+      },
+      // Layout spacing that steps up with the screen (16→24→32 and so on), set
+      // in app/globals.css. Use them for page structure: `px-gutter`,
+      // `gap-section`, `p-card`. lib/utils.ts teaches tailwind-merge the names.
+      spacing: {
+        gutter: "var(--space-gutter)",
+        section: "var(--space-section)",
+        card: "var(--space-card)",
       },
       borderRadius: {
         lg: "var(--radius)",

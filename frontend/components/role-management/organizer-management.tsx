@@ -121,7 +121,7 @@ export function OrganizerManagement() {
       </div>
 
       <div className="rounded-md border bg-white dark:bg-[#2a2a2a]">
-        <div className="grid grid-cols-12 gap-4 p-4 font-medium border-b text-black dark:text-white">
+        <div className="grid grid-cols-12 gap-4 px-4 py-3 font-medium border-b text-black dark:text-white">
           <div className="col-span-5">Name</div>
           <div className="col-span-4">Email</div>
           <div className="col-span-3">Role</div>
@@ -134,7 +134,7 @@ export function OrganizerManagement() {
             {paginatedOrganizers.map((organizer) => (
               <div
                 key={organizer.id}
-                className="grid grid-cols-12 gap-4 p-4 border-b hover:bg-gray-50 dark:hover:bg-gray-800 cursor-pointer"
+                className="grid grid-cols-12 gap-4 px-4 py-3 border-b hover:bg-gray-50 dark:hover:bg-gray-800 cursor-pointer"
                 onClick={() => handleViewOrganizer(organizer)}
               >
                 <div className="col-span-5 flex items-center">
@@ -163,7 +163,7 @@ export function OrganizerManagement() {
       </div>
 
       {totalPages > 1 && (
-        <div className="mt-4 flex justify-center">
+        <div className="flex justify-center">
           <Pagination currentPage={currentPage} totalPages={totalPages} onPageChange={handlePageChange} />
         </div>
       )}
@@ -174,7 +174,7 @@ export function OrganizerManagement() {
           <DialogHeader>
             <DialogTitle>Add Organizer</DialogTitle>
           </DialogHeader>
-          <div className="space-y-4 py-4">
+          <div className="space-y-4">
             <div className="relative">
               <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-gray-500" />
               <Input
@@ -193,7 +193,7 @@ export function OrganizerManagement() {
                 filteredUsers.map((user) => (
                   <div
                     key={user.id}
-                    className="flex items-center justify-between p-3 border-b hover:bg-gray-50 dark:hover:bg-gray-800 cursor-pointer"
+                    className="flex items-center justify-between px-4 py-3 border-b hover:bg-gray-50 dark:hover:bg-gray-800 cursor-pointer"
                     onClick={() => handleAddOrganizer(user)}
                   >
                     <div className="flex items-center">
@@ -229,7 +229,7 @@ export function OrganizerManagement() {
               <DialogHeader>
                 <DialogTitle>Organizer Details</DialogTitle>
               </DialogHeader>
-              <div className="space-y-4 py-4">
+              <div className="space-y-4">
                 <div className="flex items-center space-x-4">
                   <Avatar className="h-12 w-12">
                     <AvatarImage

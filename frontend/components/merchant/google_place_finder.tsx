@@ -338,7 +338,7 @@ export default function PlaceAutocomplete({
             if (value) onSelect(null);
           }}
           onFocus={() => setOpen(true)}
-          className="bg-secondary pl-9 pr-9 text-black dark:text-white"
+          className="bg-secondary pl-10 pr-10 text-black dark:text-white"
           placeholder={
             manualEntry ? "Start typing your street address" : "Search for your business or address"
           }

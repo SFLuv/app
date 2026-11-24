@@ -129,7 +129,7 @@ export default function DeleteAccountPage() {
   }
 
   return (
-    <main className="min-h-screen overflow-hidden bg-[#fff8f1] px-4 py-8 text-slate-950 sm:px-6 lg:px-8">
+    <main className="min-h-screen overflow-hidden bg-[#fff8f1] px-gutter py-8 text-slate-950">
       <div className="pointer-events-none fixed inset-0 -z-10 bg-[radial-gradient(circle_at_20%_10%,rgba(235,108,108,0.20),transparent_34%),radial-gradient(circle_at_85%_12%,rgba(255,195,132,0.24),transparent_32%),linear-gradient(145deg,#fffaf4_0%,#f7efe5_100%)]" />
 
       <section className="mx-auto flex min-h-[calc(100vh-4rem)] max-w-3xl items-center">

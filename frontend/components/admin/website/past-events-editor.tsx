@@ -6,6 +6,7 @@ import { ArrowLeft, ArrowRight, ExternalLink, ImageIcon, Loader2, Pencil, Plus, 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { InfoTip } from "@/components/ui/info-tip"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
@@ -136,12 +137,14 @@ export function PastEventsEditor() {
       <Card>
         <CardHeader className="flex flex-row flex-wrap items-start justify-between gap-4 space-y-0">
           <div className="max-w-2xl space-y-1.5">
-            <CardTitle>Past events</CardTitle>
-            <CardDescription>
-              The tiles under Past events on the volunteers page. Each opens a gallery of photos from that event. Adding one only adds a
-              tile and its photos: it doesn’t create a volunteer event, QR codes or SFLUV rewards. Changes show on the website within
-              about 30 seconds.
-            </CardDescription>
+            <CardTitle className="flex items-center gap-2">
+              Past events
+              <InfoTip>
+                The tiles under Past events on the volunteers page. Each opens a gallery of photos from that event. Adding one only adds a
+                tile and its photos: it doesn’t create a volunteer event, QR codes or SFLUV rewards. Changes show on the website within
+                about 30 seconds.
+              </InfoTip>
+            </CardTitle>
           </div>
           <Button onClick={() => setView({ mode: "new" })}>
             <Plus className="mr-2 h-4 w-4" /> New past event
@@ -149,7 +152,7 @@ export function PastEventsEditor() {
         </CardHeader>
         <CardContent>
           {shown.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No past events yet. Add one to get started.</p>
+            <p className="text-sm text-muted-foreground">No past events yet.</p>
           ) : (
             <ul className="divide-y rounded-lg border">
               {shown.map((ev) => (
@@ -185,8 +188,10 @@ export function PastEventsEditor() {
       {removed.length > 0 && (
         <Card>
           <CardHeader>
-            <CardTitle className="text-lg">Recently removed</CardTitle>
-            <CardDescription>Not shown on the website. Restore one to put it back, photos and all.</CardDescription>
+            <CardTitle className="flex items-center gap-2 text-lg">
+              Recently removed
+              <InfoTip>Not shown on the website. Restore one to put it back, photos and all.</InfoTip>
+            </CardTitle>
           </CardHeader>
           <CardContent>
             <ul className="divide-y rounded-lg border">
@@ -282,12 +287,20 @@ function PastEventDetails({
 
   return (
     <Card>
-      <CardHeader className="space-y-3">
+      <CardHeader className="gap-3">
         <Button variant="ghost" size="sm" className="-ml-2 w-fit" onClick={onBack}>
           <ArrowLeft className="mr-1.5 h-4 w-4" /> All past events
         </Button>
         <div className="flex flex-wrap items-center gap-3">
-          <CardTitle>{event ? `Edit “${event.title}”` : "New past event"}</CardTitle>
+          <CardTitle className="flex items-center gap-2">
+            {event ? `Edit “${event.title}”` : "New past event"}
+            {!event && (
+              <InfoTip>
+                This adds a tile under Past events on the volunteers page, with its own photo gallery. It doesn’t create a volunteer event, QR
+                codes or SFLUV rewards.
+              </InfoTip>
+            )}
+          </CardTitle>
           {event && (
             <Button variant="outline" size="sm" asChild>
               <a href={pastEventUrl(event.slug)} target="_blank" rel="noreferrer">
@@ -296,25 +309,19 @@ function PastEventDetails({
             </Button>
           )}
         </div>
-        {!event && (
-          <CardDescription>
-            This adds a tile under Past events on the volunteers page, with its own photo gallery. It doesn’t create a volunteer event, QR
-            codes or SFLUV rewards.
-          </CardDescription>
-        )}
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="grid gap-4 sm:grid-cols-[2fr_1fr]">
-          <div className="space-y-1">
+          <div className="space-y-2">
             <Label htmlFor="past-title">Title</Label>
             <Input id="past-title" value={title} maxLength={150} placeholder="Tenderloin Weekly Clean-up" onChange={(e) => setTitle(e.target.value)} />
           </div>
-          <div className="space-y-1">
+          <div className="space-y-2">
             <Label htmlFor="past-date">Date it took place</Label>
             <Input id="past-date" type="date" value={date} max={todayInSF()} onChange={(e) => setDate(e.target.value)} />
           </div>
         </div>
-        <div className="space-y-1">
+        <div className="space-y-2">
           <Label htmlFor="past-description">A few words about it (optional, shown on the gallery page)</Label>
           <Textarea id="past-description" rows={3} maxLength={2000} value={description} onChange={(e) => setDescription(e.target.value)} />
         </div>

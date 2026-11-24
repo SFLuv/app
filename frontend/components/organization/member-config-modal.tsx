@@ -14,6 +14,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Checkbox } from "@/components/ui/checkbox"
+import { InfoTip } from "@/components/ui/info-tip"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Separator } from "@/components/ui/separator"
@@ -232,7 +233,7 @@ export function MemberConfigModal({
             first if that needs to change.
           </p>
         ) : (
-          <div className="space-y-5">
+          <div className="space-y-6">
             <div className="space-y-2">
               <Label className="text-xs uppercase tracking-wide text-muted-foreground">Role</Label>
               <Select
@@ -317,12 +318,10 @@ export function MemberConfigModal({
             <>
               <Separator />
               <div className="space-y-2">
-                <Label className="text-xs uppercase tracking-wide text-muted-foreground">
+                <Label className="flex items-center gap-1.5 text-xs uppercase tracking-wide text-muted-foreground">
                   {administrative.label} — SFLuv only
+                  <InfoTip>Granted one at a time and never inherited, so an admin does not hold these by being an admin.</InfoTip>
                 </Label>
-                <p className="text-xs text-muted-foreground">
-                  Granted one at a time and never inherited, so an admin does not hold these by being an admin.
-                </p>
                 <div className="space-y-2">
                   {administrative.capabilities.map((capability) => (
                     <label
@@ -341,10 +340,10 @@ export function MemberConfigModal({
                         }}
                       />
                       <span className="min-w-0">
-                        <span className="block text-sm font-medium text-black dark:text-white">
+                        <span className="flex items-center gap-1.5 text-sm font-medium text-black dark:text-white">
                           {capability.label}
+                          {capability.hint ? <InfoTip>{capability.hint}</InfoTip> : null}
                         </span>
-                        <span className="block text-xs text-muted-foreground">{capability.hint}</span>
                       </span>
                     </label>
                   ))}
@@ -353,7 +352,7 @@ export function MemberConfigModal({
             </>
           )}
 
-        <DialogFooter className="gap-2 sm:gap-2">
+        <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
             Close
           </Button>

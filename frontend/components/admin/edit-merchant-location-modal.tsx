@@ -8,11 +8,11 @@ import { Button } from "@/components/ui/button"
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import { InfoTip } from "@/components/ui/info-tip"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
@@ -175,23 +175,30 @@ export function EditMerchantLocationModal({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90vh] w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] overflow-y-auto p-4 sm:max-w-[760px] sm:p-6">
+      <DialogContent
+        className="max-h-[90vh] w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] overflow-y-auto sm:max-w-[760px]"
+        aria-describedby={undefined}
+      >
         <DialogHeader>
-          <DialogTitle>Edit merchant details</DialogTitle>
-          <DialogDescription>
-            Corrections apply to the public listing straight away. Approval status is managed separately.
-          </DialogDescription>
+          <DialogTitle>
+            <span className="inline-flex items-center gap-1.5">
+              Edit merchant details
+              <InfoTip>
+                Corrections apply to the public listing straight away. Approval status is managed separately.
+              </InfoTip>
+            </span>
+          </DialogTitle>
         </DialogHeader>
 
-        <div className="space-y-6 py-2">
+        <div className="space-y-8">
           <section className="space-y-4">
             <h3 className="border-b pb-2 text-sm font-semibold">Business</h3>
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-              <div className="space-y-1.5">
+              <div className="space-y-2">
                 <Label htmlFor="merchant-name">Business name</Label>
                 <Input id="merchant-name" value={name} onChange={(event) => setName(event.target.value)} />
               </div>
-              <div className="space-y-1.5">
+              <div className="space-y-2">
                 <Label htmlFor="merchant-type">Merchant type</Label>
                 <Input
                   id="merchant-type"
@@ -207,7 +214,7 @@ export function EditMerchantLocationModal({
                 </datalist>
               </div>
             </div>
-            <div className="space-y-1.5">
+            <div className="space-y-2">
               <Label htmlFor="merchant-description">Description</Label>
               <Textarea
                 id="merchant-description"
@@ -220,20 +227,20 @@ export function EditMerchantLocationModal({
 
           <section className="space-y-4">
             <h3 className="border-b pb-2 text-sm font-semibold">Address</h3>
-            <div className="space-y-1.5">
+            <div className="space-y-2">
               <Label htmlFor="merchant-street">Street</Label>
               <Input id="merchant-street" value={street} onChange={(event) => setStreet(event.target.value)} />
             </div>
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-              <div className="space-y-1.5">
+              <div className="space-y-2">
                 <Label htmlFor="merchant-city">City</Label>
                 <Input id="merchant-city" value={city} onChange={(event) => setCity(event.target.value)} />
               </div>
-              <div className="space-y-1.5">
+              <div className="space-y-2">
                 <Label htmlFor="merchant-state">State</Label>
                 <Input id="merchant-state" value={state} onChange={(event) => setState(event.target.value)} />
               </div>
-              <div className="space-y-1.5">
+              <div className="space-y-2">
                 <Label htmlFor="merchant-zip">ZIP</Label>
                 <Input id="merchant-zip" value={zip} onChange={(event) => setZip(event.target.value)} />
               </div>
@@ -247,15 +254,15 @@ export function EditMerchantLocationModal({
           <section className="space-y-4">
             <h3 className="border-b pb-2 text-sm font-semibold">Contact</h3>
             <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-              <div className="space-y-1.5">
+              <div className="space-y-2">
                 <Label htmlFor="merchant-phone">Phone</Label>
                 <Input id="merchant-phone" value={phone} onChange={(event) => setPhone(event.target.value)} />
               </div>
-              <div className="space-y-1.5">
+              <div className="space-y-2">
                 <Label htmlFor="merchant-email">Email</Label>
                 <Input id="merchant-email" value={email} onChange={(event) => setEmail(event.target.value)} />
               </div>
-              <div className="space-y-1.5">
+              <div className="space-y-2">
                 <Label htmlFor="merchant-website">Website</Label>
                 <Input id="merchant-website" value={website} onChange={(event) => setWebsite(event.target.value)} />
               </div>
@@ -278,12 +285,12 @@ export function EditMerchantLocationModal({
             <h3 className="flex items-center gap-2 text-sm font-semibold">
               <MapPin className="h-4 w-4" />
               Re-point at a Google listing
+              <InfoTip>
+                Pulls name, address, coordinates, type and hours from Google and{" "}
+                <strong>overwrites the fields above</strong>, including anything typed here. Use it when the
+                merchant has moved or was matched to the wrong listing.
+              </InfoTip>
             </h3>
-            <p className="text-xs text-muted-foreground">
-              Pulls name, address, coordinates, type and hours from Google and{" "}
-              <strong>overwrites the fields above</strong>, including anything typed here. Use it when the
-              merchant has moved or was matched to the wrong listing.
-            </p>
             {/* Re-pointing is Google-only by definition: it exists to replace
                 this listing's place id. A manual address has none, so that
                 branch of the picker is ignored here. */}
@@ -313,7 +320,7 @@ export function EditMerchantLocationModal({
           )}
         </div>
 
-        <DialogFooter className="gap-2">
+        <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
             Cancel
           </Button>

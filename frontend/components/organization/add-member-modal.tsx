@@ -7,11 +7,11 @@ import { Button } from "@/components/ui/button"
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import { InfoTip } from "@/components/ui/info-tip"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -107,15 +107,19 @@ export function AddMemberModal({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
+      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg" aria-describedby={undefined}>
         <DialogHeader>
-          <DialogTitle>Add a member</DialogTitle>
-          <DialogDescription>
-            They get an email with a join link. It expires in seven days and only works for the address it was sent to.
-          </DialogDescription>
+          <DialogTitle>
+            <span className="inline-flex items-center gap-1.5">
+              Add a member
+              <InfoTip>
+                They get an email with a join link. It expires in seven days and only works for the address it was sent to.
+              </InfoTip>
+            </span>
+          </DialogTitle>
         </DialogHeader>
 
-        <div className="space-y-5">
+        <div className="space-y-6">
           <div className="space-y-2">
             <Label className="text-xs uppercase tracking-wide text-muted-foreground">Email</Label>
             <Input
@@ -163,7 +167,7 @@ export function AddMemberModal({
           )}
         </div>
 
-        <DialogFooter className="gap-2 sm:gap-2">
+        <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={sending}>
             Cancel
           </Button>

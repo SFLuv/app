@@ -49,14 +49,14 @@ export function LocationApplicationStatusCard({
       {/* The listing's name is the card's subject and its status is the
           answer, so the two share the header instead of one restating the other
           as a sentence underneath. */}
-      <CardHeader className={`${headerClass} flex flex-row items-center justify-between gap-3 px-4 pb-3 pt-5 sm:px-6`}>
+      <CardHeader className={`${headerClass} flex flex-row items-center justify-between gap-3 py-4`}>
         <CardTitle className="text-black dark:text-white">{location.name}</CardTitle>
         <span className="flex shrink-0 items-center text-sm font-semibold text-black dark:text-white">
           <Icon className={iconClass} />
           {title}
         </span>
       </CardHeader>
-      <CardContent className="space-y-4 px-4 pb-5 pt-4 sm:px-6">{children}</CardContent>
+      <CardContent className="space-y-4 pt-card">{children}</CardContent>
     </Card>
   )
 }

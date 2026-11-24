@@ -25,7 +25,7 @@ export function UsdcBalanceCard({ balance, showBalance, loading = false }: UsdcB
 
   return (
     <Card className={`overflow-hidden border ${USDC.cardBorder} ${USDC.cardBg} shadow-sm`}>
-      <CardContent className="space-y-3 py-5 sm:py-6">
+      <CardContent className="space-y-3 pt-card">
         <p className={`text-[11px] sm:text-xs font-medium uppercase tracking-[0.16em] ${USDC.accentText}`}>
           USDC on Celo
         </p>

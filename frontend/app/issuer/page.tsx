@@ -4,15 +4,15 @@ import { useCallback, useEffect, useMemo, useState } from "react"
 import { useApp } from "@/context/AppProvider"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import { InfoTip } from "@/components/ui/info-tip"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -234,13 +234,15 @@ export default function IssuerPage() {
 
   if (!canUsePanel) {
     return (
-      <div className="container mx-auto p-4 space-y-4">
+      <div className="container mx-auto space-y-4">
         <Card>
           <CardHeader>
-            <CardTitle>Issuer Access Required</CardTitle>
-            <CardDescription>
-              Your account is not approved for credential issuing. Admins can grant issuer role and credential scopes.
-            </CardDescription>
+            <CardTitle className="flex items-center gap-2">
+              Issuer Access Required
+              <InfoTip>
+                Your account is not approved for credential issuing. Admins can grant issuer role and credential scopes.
+              </InfoTip>
+            </CardTitle>
           </CardHeader>
         </Card>
       </div>
@@ -248,10 +250,9 @@ export default function IssuerPage() {
   }
 
   return (
-    <div className="container mx-auto p-4 space-y-6">
+    <div className="container mx-auto space-y-section">
       <div>
         <h1 className="text-3xl font-bold">Issuer Panel</h1>
-        <p className="text-muted-foreground">Review credential requests and approve or reject them.</p>
       </div>
 
       {error && (
@@ -273,8 +274,8 @@ export default function IssuerPage() {
           <CardTitle className="flex items-center gap-2">
             <ShieldCheck className="h-5 w-5" />
             Your Credential Scope
+            <InfoTip>Only credentials in your scope can be granted.</InfoTip>
           </CardTitle>
-          <CardDescription>Only credentials in your scope can be granted.</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-wrap gap-2">
           {(scopes?.allowed_credentials || []).length === 0 ? (
@@ -290,10 +291,8 @@ export default function IssuerPage() {
           <CardTitle className="flex items-center gap-2">
             <ClipboardList className="h-5 w-5" />
             Credential Requests
+            <InfoTip>Requests are shown only for credential types your issuer account can grant.</InfoTip>
           </CardTitle>
-          <CardDescription>
-            Requests are shown only for credential types your issuer account can grant.
-          </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="flex flex-col gap-3">
@@ -381,16 +380,13 @@ export default function IssuerPage() {
       </Card>
 
       <Dialog open={modalOpen} onOpenChange={setModalOpen}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className="max-w-lg" aria-describedby={undefined}>
           <DialogHeader>
             <DialogTitle>Credential Request</DialogTitle>
-            <DialogDescription>
-              Review requester details and set the request outcome.
-            </DialogDescription>
           </DialogHeader>
 
           {selectedRequest && (
-            <div className="space-y-3">
+            <div className="space-y-4">
               <div className="space-y-1">
                 <Label>Requester</Label>
                 <p className="text-sm">{selectedRequest.requester_name}</p>
@@ -414,7 +410,7 @@ export default function IssuerPage() {
                 </Badge>
               </div>
 
-              <div className="space-y-1">
+              <div className="space-y-2">
                 <Label>Change Approval Status</Label>
                 <Select value={statusDraft} onValueChange={(value) => setStatusDraft(value as CredentialRequest["status"])}>
                   <SelectTrigger>

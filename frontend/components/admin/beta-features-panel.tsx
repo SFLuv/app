@@ -6,6 +6,7 @@ import { AlertTriangle, Loader2, Plus, RefreshCw, Search, UserMinus, UserPlus } 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { InfoTip } from "@/components/ui/info-tip"
 import { Input } from "@/components/ui/input"
 import { useApp } from "@/context/AppProvider"
 import { useToast } from "@/hooks/use-toast"
@@ -168,7 +169,7 @@ export function BetaFeaturesPanel() {
   if (unavailable) {
     return (
       <Card>
-        <CardHeader>
+        <CardHeader className="pb-card">
           <CardTitle className="text-base text-black dark:text-white">Beta features</CardTitle>
           <CardDescription>{unavailable}</CardDescription>
         </CardHeader>
@@ -183,10 +184,10 @@ export function BetaFeaturesPanel() {
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="text-xl font-semibold text-black dark:text-white">Beta features</h2>
-          <p className="text-sm text-muted-foreground">
-            Features that exist in the app but are shown only to the people added here.
-          </p>
+          <h2 className="flex items-center gap-2 text-xl font-semibold text-black dark:text-white">
+            Beta features
+            <InfoTip>Features that exist in the app but are shown only to the people added here.</InfoTip>
+          </h2>
         </div>
         <Button variant="outline" size="sm" onClick={() => void loadFeatures()} disabled={loading}>
           <RefreshCw className={`mr-2 h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
@@ -195,7 +196,7 @@ export function BetaFeaturesPanel() {
       </div>
 
       {/* One card per feature, so the switch and the headcount are read together. */}
-      <div className="grid gap-3 sm:grid-cols-2">
+      <div className="grid gap-4 sm:grid-cols-2 sm:gap-6">
         {features.map((item) => (
           <button
             key={item.id}
@@ -231,7 +232,7 @@ export function BetaFeaturesPanel() {
               grant is recorded and does nothing. */}
           {!feature.env_enabled ? (
             <Card className="border-destructive">
-              <CardHeader className="pb-3">
+              <CardHeader className="pb-card">
                 <CardTitle className="flex items-center gap-2 text-base text-black dark:text-white">
                   <AlertTriangle className="h-4 w-4 text-destructive" />
                   {feature.label} is switched off for everyone
@@ -247,9 +248,8 @@ export function BetaFeaturesPanel() {
           ) : null}
 
           <Card>
-            <CardHeader className="pb-3">
+            <CardHeader>
               <CardTitle className="text-base text-black dark:text-white">Add someone to {feature.label}</CardTitle>
-              <CardDescription>Search by name or email, then add them.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
               <form
@@ -310,15 +310,15 @@ export function BetaFeaturesPanel() {
           </Card>
 
           <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-base text-black dark:text-white">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-base text-black dark:text-white">
                 {feature.label} — {active.length} {active.length === 1 ? "person" : "people"}
+                <InfoTip>
+                  {feature.id === "chat"
+                    ? "Both people need access for a chat to start. Removing someone leaves their conversations intact and greys them out for whoever they were talking to; adding them back restores everything."
+                    : "Removing someone leaves their posts intact; adding them back restores access to them."}
+                </InfoTip>
               </CardTitle>
-              <CardDescription>
-                {feature.id === "chat"
-                  ? "Both people need access for a chat to start. Removing someone leaves their conversations intact and greys them out for whoever they were talking to; adding them back restores everything."
-                  : "Removing someone leaves their posts intact; adding them back restores access to them."}
-              </CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
               {membersLoading ? (

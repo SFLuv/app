@@ -19,7 +19,6 @@ export function TransactionHistoryList({ transactions, walletAddress, onSelectTr
           <Clock className="h-5 w-5 sm:h-6 sm:w-6 text-muted-foreground" />
         </div>
         <p className="text-sm sm:text-base text-muted-foreground">No transactions yet</p>
-        <p className="text-xs sm:text-sm text-muted-foreground mt-1">Your transaction history will appear here</p>
       </div>
     )
   }
@@ -49,7 +48,7 @@ export function TransactionHistoryList({ transactions, walletAddress, onSelectTr
         return (
           <div
             key={transaction.id}
-            className={`flex items-center justify-between p-2.5 sm:p-3 rounded-lg border bg-card/50 ${
+            className={`flex items-center justify-between p-3 rounded-lg border bg-card/50 ${
               onSelectTransaction ? "cursor-pointer transition-colors hover:bg-accent/40" : ""
             }`}
             onClick={onSelectTransaction ? () => onSelectTransaction(transaction) : undefined}

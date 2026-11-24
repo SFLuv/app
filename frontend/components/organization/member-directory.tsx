@@ -5,7 +5,8 @@ import { ChevronLeft, ChevronRight, Clock, Crown, Loader2, Search, Shield, UserP
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { InfoTip } from "@/components/ui/info-tip"
 import { Input } from "@/components/ui/input"
 import { useApp } from "@/context/AppProvider"
 import { AddMemberModal } from "@/components/organization/add-member-modal"
@@ -153,16 +154,16 @@ export function MemberDirectory({
 
   return (
     <Card>
-      <CardHeader className="pb-3">
+      <CardHeader>
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <CardTitle className="flex items-center gap-2 text-base text-black dark:text-white">
               <Users className="h-4 w-4" /> {title}
+              <InfoTip>
+                {description ??
+                  "Everyone in the organization, and anybody invited. Click a person to set their role and what they can do."}
+              </InfoTip>
             </CardTitle>
-            <CardDescription>
-              {description ??
-                "Everyone in the organization, and anybody invited. Click a person to set their role and what they can do."}
-            </CardDescription>
           </div>
           {canManage && (
             <Button onClick={() => setAddOpen(true)}>

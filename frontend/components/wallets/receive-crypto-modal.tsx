@@ -1,7 +1,8 @@
 "use client"
 
 import { useMemo, useRef, useState } from "react"
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { InfoTip } from "@/components/ui/info-tip"
 import { SfluvQRCode, type SfluvQRCodeHandle } from "@/components/ui/sfluv-qr-code"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -84,18 +85,20 @@ export function ReceiveCryptoModal({ open, onOpenChange, wallet }: ReceiveCrypto
       setMoreOptions(false)
       onOpenChange(open)
     }}>
-      <DialogContent className="mx-auto w-[calc(100vw-1rem)] max-w-md max-h-[90vh] rounded-lg overflow-y-auto overflow-x-hidden p-4 sm:p-6">
-        <DialogHeader className="space-y-2 pb-2">
-          <DialogTitle className="text-lg sm:text-xl">Receive Cryptocurrency</DialogTitle>
-          <DialogDescription className="text-sm">
-            Share your wallet address to receive {currencySymbol} on {networkName}
-          </DialogDescription>
+      <DialogContent className="mx-auto w-[calc(100vw-1rem)] max-w-md max-h-[90vh] rounded-lg overflow-y-auto overflow-x-hidden" aria-describedby={undefined}>
+        <DialogHeader>
+          <DialogTitle className="text-lg sm:text-xl">
+            <span className="inline-flex items-center gap-1.5">
+              Receive Cryptocurrency
+              <InfoTip>Share your wallet address to receive {currencySymbol} on {networkName}</InfoTip>
+            </span>
+          </DialogTitle>
         </DialogHeader>
 
         <div className="space-y-4 sm:space-y-6">
           {/* QR Code Section */}
           <Card className="overflow-hidden border-primary/20 bg-gradient-to-b from-primary/5 via-background to-background">
-            <CardContent className="p-4 sm:p-6">
+            <CardContent className="pt-card">
               <div className="text-center space-y-3 sm:space-y-4">
                 <SfluvQRCode
                     ref={QRRef}
@@ -111,7 +114,7 @@ export function ReceiveCryptoModal({ open, onOpenChange, wallet }: ReceiveCrypto
 
           {/* Choose CitizenWallet or External QR*/}
           <Tabs defaultValue="cw" value={activeTab} onValueChange={setActiveTab} className="w-full">
-            <TabsList className="grid grid-cols-2 w-full mb-6 bg-secondary">
+            <TabsList className="grid grid-cols-2 w-full bg-secondary">
               <TabsTrigger value="cw" className="text-black dark:text-white">
                 Citizen Wallet
               </TabsTrigger>
@@ -153,7 +156,7 @@ export function ReceiveCryptoModal({ open, onOpenChange, wallet }: ReceiveCrypto
                 className="mx-auto text-center"
               >
                 <CollapsibleTrigger>
-                  <div className="flex items-center gap-0.5 lg:gap-0.2 text-xs text-muted-foreground">
+                  <div className="flex items-center gap-0.5 text-xs text-muted-foreground">
                     More Options {moreOptions
                       ? <ChevronDown className="h-3 w-3 sm:h-3.5 sm:w-3.5 p-0 text-muted-foreground" />
                       : <ChevronRight className="h-3 w-3 sm:h-3.5 sm:w-3.5 p-0 text-muted-foreground" />

@@ -5,7 +5,8 @@ import { ArrowDown, ArrowUp, History, ImageIcon, Loader2, Plus, Trash2, Upload, 
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { InfoTip } from "@/components/ui/info-tip"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
@@ -100,7 +101,7 @@ function itemTitle(key: ListKey, item: SiteResources[ListKey][number]): string {
 function VideoField({ id, value, onChange }: { id: string; value: string; onChange: (value: string) => void }) {
   const videoId = value.trim() ? youTubeId(value) : null
   return (
-    <div className="space-y-1">
+    <div className="space-y-2">
       <Label htmlFor={id}>YouTube link</Label>
       <Input id={id} value={value} maxLength={500} placeholder="https://www.youtube.com/watch?v=…" onChange={(e) => onChange(e.target.value)} />
       {value.trim() && !videoId && (
@@ -173,11 +174,11 @@ function ItemFields({ section, item, onChange }: { section: ListKey; item: AnyIt
       const v = item as SiteResources["how_to"][number]
       return (
         <div className="grid gap-3">
-          <div className="space-y-1">
+          <div className="space-y-2">
             <Label htmlFor={field("title")}>Title</Label>
             <Input id={field("title")} value={v.title} maxLength={150} placeholder="How to redeem a perk QR code" onChange={(e) => onChange({ ...v, title: e.target.value })} />
           </div>
-          <div className="space-y-1">
+          <div className="space-y-2">
             <Label htmlFor={field("description")}>Description (optional)</Label>
             <Textarea id={field("description")} value={v.description} maxLength={1000} rows={3} onChange={(e) => onChange({ ...v, description: e.target.value })} />
           </div>
@@ -189,19 +190,19 @@ function ItemFields({ section, item, onChange }: { section: ListKey; item: AnyIt
       const b = item as SiteResources["books"][number]
       return (
         <div className="grid gap-3 sm:grid-cols-2">
-          <div className="space-y-1">
+          <div className="space-y-2">
             <Label htmlFor={field("title")}>Title</Label>
             <Input id={field("title")} value={b.title} maxLength={200} onChange={(e) => onChange({ ...b, title: e.target.value })} />
           </div>
-          <div className="space-y-1">
+          <div className="space-y-2">
             <Label htmlFor={field("author")}>Author</Label>
             <Input id={field("author")} value={b.author} maxLength={150} onChange={(e) => onChange({ ...b, author: e.target.value })} />
           </div>
-          <div className="space-y-1 sm:col-span-2">
+          <div className="space-y-2 sm:col-span-2">
             <Label htmlFor={field("href")}>Link</Label>
             <Input id={field("href")} value={b.href} maxLength={500} placeholder="https://…" onChange={(e) => onChange({ ...b, href: e.target.value })} />
           </div>
-          <div className="space-y-1 sm:col-span-2">
+          <div className="space-y-2 sm:col-span-2">
             <Label>Cover</Label>
             <BookCover book={b} onChange={(next) => onChange(next)} />
           </div>
@@ -212,11 +213,11 @@ function ItemFields({ section, item, onChange }: { section: ListKey; item: AnyIt
       const p = item as SiteResources["podcasts"][number]
       return (
         <div className="grid gap-3 sm:grid-cols-2">
-          <div className="space-y-1">
+          <div className="space-y-2">
             <Label htmlFor={field("name")}>Name</Label>
             <Input id={field("name")} value={p.name} maxLength={150} onChange={(e) => onChange({ ...p, name: e.target.value })} />
           </div>
-          <div className="space-y-1">
+          <div className="space-y-2">
             <Label htmlFor={field("href")}>Podcast’s page</Label>
             <Input id={field("href")} value={p.href} maxLength={500} placeholder="https://…" onChange={(e) => onChange({ ...p, href: e.target.value })} />
           </div>
@@ -230,11 +231,11 @@ function ItemFields({ section, item, onChange }: { section: ListKey; item: AnyIt
       const l = item as SiteResources["technical_links"][number]
       return (
         <div className="grid gap-3 sm:grid-cols-2">
-          <div className="space-y-1">
+          <div className="space-y-2">
             <Label htmlFor={field("label")}>Words shown</Label>
             <Input id={field("label")} value={l.label} maxLength={150} placeholder="docs.celo.org — Discover Celo" onChange={(e) => onChange({ ...l, label: e.target.value })} />
           </div>
-          <div className="space-y-1">
+          <div className="space-y-2">
             <Label htmlFor={field("href")}>Link</Label>
             <Input id={field("href")} value={l.href} maxLength={500} placeholder="https://…" onChange={(e) => onChange({ ...l, href: e.target.value })} />
           </div>
@@ -330,10 +331,12 @@ export function ResourcesEditor() {
   return (
     <div className="space-y-6">
       <div>
-        <h3 className="text-lg font-semibold">Resources page</h3>
-        <p className="text-sm text-muted-foreground">
-          sfluv.org/resources, section by section. Switch an item off to hide it without losing it. Changes show on the website within about 30 seconds of saving.
-        </p>
+        <h3 className="flex items-center gap-2 text-lg font-semibold">
+          Resources page
+          <InfoTip>
+            sfluv.org/resources, section by section. Switch an item off to hide it without losing it. Changes show on the website within about 30 seconds of saving.
+          </InfoTip>
+        </h3>
       </div>
 
       {SECTION_ORDER.map((section) => {
@@ -346,8 +349,8 @@ export function ResourcesEditor() {
                 <CardTitle className="flex items-center gap-2">
                   {section.key === "how_to" && <Video className="h-4 w-4" />}
                   {section.title}
+                  <InfoTip>{section.description}</InfoTip>
                 </CardTitle>
-                <CardDescription>{section.description}</CardDescription>
               </div>
               <Button variant="outline" onClick={() => add(section.key)}>
                 <Plus className="mr-2 h-4 w-4" /> Add {section.noun}
@@ -414,8 +417,8 @@ export function ResourcesEditor() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-lg">
             <History className="h-4 w-4" /> History
+            <InfoTip>Every save is kept. Restoring an older version puts it back on the site and adds it to this list.</InfoTip>
           </CardTitle>
-          <CardDescription>Every save is kept. Restoring an older version puts it back on the site and adds it to this list.</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="divide-y rounded-lg border">

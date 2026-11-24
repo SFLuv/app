@@ -5,7 +5,8 @@ import { useRouter, useSearchParams } from "next/navigation"
 import { useApp } from "@/context/AppProvider"
 import { VerifiedEmailResponse } from "@/types/server"
 import { CredentialVisibility, GlobalCredentialType } from "@/types/workflow"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { InfoTip } from "@/components/ui/info-tip"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -208,7 +209,7 @@ export default function ImproverJoinPage() {
 
   if (roleNotFound) {
     return (
-      <div className="mx-auto w-full max-w-xl py-8">
+      <div className="mx-auto w-full max-w-xl">
         <Card>
           <CardHeader>
             <CardTitle>Role not found</CardTitle>
@@ -233,13 +234,10 @@ export default function ImproverJoinPage() {
 
   if (status === "unauthenticated") {
     return (
-      <div className="mx-auto w-full max-w-xl py-8">
+      <div className="mx-auto w-full max-w-xl">
         <Card className="border-[#eb6c6c]/35 bg-[#eb6c6c]/5">
           <CardHeader>
             <CardTitle>Log in to continue</CardTitle>
-            <CardDescription>
-              Sign in to request {roleDisplayName || "this role"} status.
-            </CardDescription>
           </CardHeader>
           <CardContent>
             <Button onClick={login} className="w-full sm:w-auto bg-[#eb6c6c] hover:bg-[#d55c5c]">
@@ -253,7 +251,7 @@ export default function ImproverJoinPage() {
 
   if (success) {
     return (
-      <div className="mx-auto w-full max-w-xl py-8">
+      <div className="mx-auto w-full max-w-xl">
         <Card className="border-green-300 dark:border-green-700">
           <CardHeader>
             <CardTitle>{roleDisplayName} status successfully requested!</CardTitle>
@@ -269,13 +267,13 @@ export default function ImproverJoinPage() {
   }
 
   return (
-    <div className="mx-auto w-full max-w-xl py-8">
+    <div className="mx-auto w-full max-w-xl">
       <Card>
         <CardHeader>
-          <CardTitle>Join as {roleDisplayName}</CardTitle>
-          <CardDescription>
-            Enter your details to request improver status and submit your credential request.
-          </CardDescription>
+          <CardTitle className="flex items-center gap-2">
+            Join as {roleDisplayName}
+            <InfoTip>Enter your details to request improver status and submit your credential request.</InfoTip>
+          </CardTitle>
         </CardHeader>
         <CardContent>
           {loadingData ? (

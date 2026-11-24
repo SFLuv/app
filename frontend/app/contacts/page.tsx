@@ -114,7 +114,6 @@ export default function ContactsPage() {
       />
       <div>
         <h1 className="text-3xl font-bold text-black dark:text-white">Contacts</h1>
-        <p className="text-gray-600 dark:text-gray-400 mt-1">Manage your contacts</p>
       </div>
       <div className="flex items-center space-x-2">
         <Checkbox

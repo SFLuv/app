@@ -4,7 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { ImagePlus, Loader2, Trash2, ZoomIn, ZoomOut } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { InfoTip } from "@/components/ui/info-tip"
 import { useApp } from "@/context/AppProvider"
 import { useToast } from "@/hooks/use-toast"
 import type { AuthedLocation } from "@/types/location"
@@ -339,12 +340,14 @@ export function MerchantPhotoCard({ location, onSaved }: MerchantPhotoCardProps)
           }
         }}
       >
-        <DialogContent className="sm:max-w-[560px]">
+        <DialogContent className="sm:max-w-[560px]" aria-describedby={undefined}>
           <DialogHeader>
-            <DialogTitle>Frame your photo</DialogTitle>
-            <DialogDescription>
-              Drag to reposition and zoom to frame. What you see in the box is what appears on your listing.
-            </DialogDescription>
+            <DialogTitle>
+              <span className="inline-flex items-center gap-1.5">
+                Frame your photo
+                <InfoTip>Drag to reposition and zoom to frame. What you see in the box is what appears on your listing.</InfoTip>
+              </span>
+            </DialogTitle>
           </DialogHeader>
 
           <div className="space-y-4">

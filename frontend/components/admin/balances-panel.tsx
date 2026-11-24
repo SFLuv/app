@@ -6,6 +6,7 @@ import { AlertTriangle, CheckCircle2, Loader2, RefreshCw, Wallet } from "lucide-
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { InfoTip } from "@/components/ui/info-tip"
 import { useApp } from "@/context/AppProvider"
 import { useToast } from "@/hooks/use-toast"
 
@@ -123,7 +124,7 @@ export function BalancesPanel() {
   if (unavailable) {
     return (
       <Card>
-        <CardHeader>
+        <CardHeader className="pb-card">
           <CardTitle className="text-base text-black dark:text-white">Balances</CardTitle>
           <CardDescription>{unavailable}</CardDescription>
         </CardHeader>
@@ -165,9 +166,14 @@ export function BalancesPanel() {
       {/* The faucet is the only account a person has to fund, so it is stated
           separately rather than as the first row of a list. */}
       <Card className={faucet.low_celo || faucet.low_sfluv ? "border-destructive" : undefined}>
-        <CardHeader className="pb-3">
+        <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base text-black dark:text-white">
             {faucet.name}
+            <InfoTip>
+              {snapshot.sponsored
+                ? "Rewards and redemptions are paid from this balance. Its transactions are sponsored, so it needs no gas of its own — the paymaster below is the balance that needs a person."
+                : "Everything below is funded from here. This is the only balance that needs a person."}
+            </InfoTip>
             {faucet.low_celo || faucet.low_sfluv ? (
               <Badge variant="destructive">Needs funding</Badge>
             ) : (
@@ -177,10 +183,7 @@ export function BalancesPanel() {
             )}
           </CardTitle>
           <CardDescription>
-            {snapshot.sponsored
-              ? "Rewards and redemptions are paid from this balance. Its transactions are sponsored, so it needs no gas of its own — the paymaster below is the balance that needs a person."
-              : "Everything below is funded from here. This is the only balance that needs a person."}
-            <span className="ml-1 font-mono text-xs">{short(faucet.address)}</span>
+            <span className="font-mono text-xs">{short(faucet.address)}</span>
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4 sm:grid-cols-2">
@@ -201,15 +204,23 @@ export function BalancesPanel() {
       </Card>
 
       <Card>
-        <CardHeader className="pb-2">
-          <CardTitle className="text-base text-black dark:text-white">Protocol accounts</CardTitle>
-          <CardDescription>
-            {snapshot.sponsored
-              ? "Only the paymaster still needs CELO: it pays for every sponsored transaction, and nothing can refill it automatically, because moving CELO out of a smart wallet is itself a transaction it would have to pay for."
-              : snapshot.auto_top_up_enabled
-                ? "Topped up automatically from the faucet when they fall below their floor."
-                : "Automatic top-ups are off — these need funding by hand, or switch them on in funding-accounts.json."}
-          </CardDescription>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base text-black dark:text-white">
+            Protocol accounts
+            {(snapshot.sponsored || snapshot.auto_top_up_enabled) && (
+              <InfoTip>
+                {snapshot.sponsored
+                  ? "Only the paymaster still needs CELO: it pays for every sponsored transaction, and nothing can refill it automatically, because moving CELO out of a smart wallet is itself a transaction it would have to pay for."
+                  : "Topped up automatically from the faucet when they fall below their floor."}
+              </InfoTip>
+            )}
+          </CardTitle>
+          {/* A state, not a subtitle: with top-ups off these need a person. */}
+          {!snapshot.sponsored && !snapshot.auto_top_up_enabled && (
+            <CardDescription>
+              Automatic top-ups are off — these need funding by hand, or switch them on in funding-accounts.json.
+            </CardDescription>
+          )}
         </CardHeader>
         <CardContent className="space-y-3">
           {accounts.length === 0 ? (

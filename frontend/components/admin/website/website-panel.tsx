@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { Loader2 } from "lucide-react"
 
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { InfoTip } from "@/components/ui/info-tip"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useApp } from "@/context/AppProvider"
 import { useAuthFetch } from "./use-auth-fetch"
@@ -93,10 +94,12 @@ function WebsitePanelInner() {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-xl font-semibold">Website</h2>
-        <p className="text-sm text-muted-foreground">
-          Change what appears on sfluv.org. Changes go live within about 30 seconds — no one needs to deploy anything.
-        </p>
+        <h2 className="flex items-center gap-2 text-xl font-semibold">
+          Website
+          <InfoTip>
+            Change what appears on sfluv.org. Changes go live within about 30 seconds — no one needs to deploy anything.
+          </InfoTip>
+        </h2>
       </div>
 
       <Tabs value={section || allowed[0].id} onValueChange={(v) => setSection(v as Section)} className="space-y-6">
@@ -144,7 +147,6 @@ function WebsitePanelInner() {
         <Card>
           <CardHeader>
             <CardTitle className="text-lg">Recent changes</CardTitle>
-            <CardDescription>Who changed what on the website.</CardDescription>
           </CardHeader>
           <CardContent>
             <ul className="divide-y rounded-lg border">

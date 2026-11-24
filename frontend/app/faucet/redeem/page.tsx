@@ -493,7 +493,7 @@ const Page = () => {
   }, [hasSigAuth, returnTo, router, shouldAutoRedirect, sigAuthRedirect, success, successRedirectTo])
 
   return (
-    <div className="min-h-screen flex items-center justify-center">
+    <div className="min-h-screen flex items-center justify-center px-gutter">
       {
         success ?
         <div style={{textAlign: "center"}}>
@@ -502,7 +502,7 @@ const Page = () => {
           </h2>
         </div>
         : showAppDownloadPrompt ?
-        <div className="mx-auto w-full max-w-md px-4 text-center">
+        <div className="mx-auto w-full max-w-md text-center">
           <div className="rounded-lg border bg-card/95 p-6 shadow-sm">
             <img
               src="/icon.png"
@@ -565,7 +565,7 @@ const Page = () => {
           </div>
         </div>
         : !error ?
-        <div className="mx-auto max-w-md px-4 text-center space-y-6 justify-center items-center">
+        <div className="mx-auto max-w-md text-center space-y-6 justify-center items-center">
           <h2 className="text-3xl font-bold text-black dark:text-white">Redeeming...</h2>
           <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-[#eb6c6c] m-auto"></div>
           {redeemStartedAt && (
@@ -575,7 +575,7 @@ const Page = () => {
           )}
         </div>
         : error ?
-        <div className="mx-auto w-full max-w-lg px-4 text-center">
+        <div className="mx-auto w-full max-w-lg text-center">
           <h2 className="text-3xl font-bold text-black dark:text-white">
             {error}
           </h2>

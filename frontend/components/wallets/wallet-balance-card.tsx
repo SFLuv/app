@@ -21,7 +21,7 @@ export function WalletBalanceCard({ balance, showBalance }: WalletBalanceCardPro
 
   return (
     <Card className="overflow-hidden border border-primary/15 bg-gradient-to-br from-[#fff7f7] via-background to-muted/20 shadow-sm dark:from-[#3a1f1f]/40 dark:via-background">
-      <CardContent className="space-y-3 py-5 sm:py-6">
+      <CardContent className="space-y-3 pt-card">
         <p className="text-[11px] sm:text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">
           Available Balance
         </p>

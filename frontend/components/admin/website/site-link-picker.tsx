@@ -69,7 +69,7 @@ function trail(places: SitePlace[], path: string): string[] | null {
 const menuSurface =
   "z-50 max-h-[min(24rem,var(--radix-dropdown-menu-content-available-height))] min-w-[14rem] max-w-[22rem] overflow-y-auto rounded-lg border border-border/70 bg-popover p-1 text-popover-foreground shadow-lg"
 const menuRow =
-  "relative flex cursor-pointer select-none items-center gap-2 rounded-md py-1.5 pl-7 pr-2 text-sm outline-none data-[highlighted]:bg-primary/12 data-[state=open]:bg-primary/12"
+  "relative flex cursor-pointer select-none items-center gap-2 rounded-md py-1.5 pl-8 pr-2 text-sm outline-none data-[highlighted]:bg-primary/12 data-[state=open]:bg-primary/12"
 
 function PlaceItems({ places, value, onPick }: { places: SitePlace[]; value: string; onPick: (place: SitePlace) => void }) {
   return (

@@ -23,11 +23,11 @@ export default function WebsitePage() {
   }
 
   if (status !== "authenticated") {
-    return <p className="container mx-auto p-4 text-sm text-muted-foreground">Sign in to use the website tools.</p>
+    return <p className="container mx-auto text-sm text-muted-foreground">Sign in to use the website tools.</p>
   }
 
   return (
-    <div className="container mx-auto px-3 py-4 sm:p-4">
+    <div className="container mx-auto">
       <WebsitePanel />
     </div>
   )

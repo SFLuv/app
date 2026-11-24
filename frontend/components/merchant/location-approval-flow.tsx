@@ -148,7 +148,7 @@ export function LocationApprovalFlow({
           never sit under it on a narrow screen. */}
       <div className="flex min-h-full w-full flex-col">
         <div
-          className={`mx-auto my-auto w-full max-w-3xl px-4 pb-10 sm:px-6 ${
+          className={`mx-auto my-auto w-full max-w-3xl px-gutter pb-10 ${
             onCancel ? "pt-16 sm:pt-20" : "pt-6"
           }`}
         >

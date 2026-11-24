@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Checkbox } from "@/components/ui/checkbox"
+import { InfoTip } from "@/components/ui/info-tip"
 import {
   Dialog,
   DialogContent,
@@ -210,7 +211,7 @@ export function LocationPayoutCard({ location, onUnwrapped }: LocationPayoutCard
       const body = (await res.json().catch(() => ({}))) as { url?: string; error?: string }
       if (!res.ok || !body.url) throw new Error(body.error || "Could not start verification")
       window.open(body.url, "_blank", "noopener")
-      toast({ title: "Verification opened in a new tab", description: "Come back here when you're done — this page will update." })
+      toast({ title: "Verification opened in a new tab", description: "Come back here when you're done — this page will update.", variant: "info" })
     } catch (error) {
       toast({ title: "Couldn't start verification", description: error instanceof Error ? error.message : undefined, variant: "destructive" })
     } finally {
@@ -251,7 +252,7 @@ export function LocationPayoutCard({ location, onUnwrapped }: LocationPayoutCard
       if (!body.url) {
         // Already accepted — say so and refresh, rather than showing a modal
         // asking for something that is done.
-        toast({ title: "Terms already accepted", description: "You're all set — you can connect a bank account." })
+        toast({ title: "Terms already accepted", description: "You're all set — you can connect a bank account.", variant: "info" })
         await loadStatus()
         return
       }
@@ -333,6 +334,7 @@ export function LocationPayoutCard({ location, onUnwrapped }: LocationPayoutCard
           toast({
             title: "Still waiting on your bank",
             description: "Your bank was submitted but hasn't come back yet. Refresh in a minute — don't reconnect, it's already on its way.",
+            variant: "warning",
           })
         }
       }
@@ -495,14 +497,12 @@ export function LocationPayoutCard({ location, onUnwrapped }: LocationPayoutCard
 
   const header = (
     <div className="flex items-start justify-between gap-3">
-      <div className="space-y-1">
+      <div>
         <h3 className="flex items-center gap-2 text-sm font-semibold text-black dark:text-white">
           <Landmark className="h-4 w-4" />
           Bank &amp; Unwrap
+          <InfoTip>Unwrap this location&apos;s SFLuv straight to your business bank account.</InfoTip>
         </h3>
-        <p className="text-xs text-muted-foreground">
-          Unwrap this location&apos;s SFLuv straight to your business bank account.
-        </p>
       </div>
       <Button type="button" size="icon" variant="ghost" onClick={() => void loadStatus()} aria-label="Refresh" disabled={loading}>
         <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />

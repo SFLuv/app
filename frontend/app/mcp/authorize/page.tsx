@@ -85,7 +85,7 @@ export default function McpAuthorizePage() {
   }, [ready, authenticated, loginState, complete])
 
   return (
-    <main className="flex min-h-screen items-center justify-center px-4 py-10">
+    <main className="flex min-h-screen items-center justify-center px-gutter py-10">
       <div className="mx-auto w-full max-w-md text-center">
         <div className="rounded-lg border bg-card/95 p-6 shadow-sm">
           <img src="/icon.png" alt="SFLUV" className="mx-auto h-16 w-16 object-contain" />

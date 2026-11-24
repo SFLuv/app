@@ -24,7 +24,7 @@ export default async function WorkflowPhotoPage({
 
   if (!photoId) {
     return (
-      <main className="min-h-screen bg-black text-white flex items-center justify-center p-6">
+      <main className="min-h-screen bg-black text-white flex items-center justify-center px-gutter py-6">
         <p className="text-sm text-white/70">Photo not found.</p>
       </main>
     )
@@ -33,7 +33,7 @@ export default async function WorkflowPhotoPage({
   const photoSrc = `${BACKEND}/workflow-photos/public/${encodeURIComponent(photoId)}`
 
   return (
-    <main className="min-h-screen bg-black flex items-center justify-center p-4 sm:p-6">
+    <main className="min-h-screen bg-black flex items-center justify-center px-gutter py-4 sm:py-6">
       <img
         src={photoSrc}
         alt="Workflow photo"

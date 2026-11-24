@@ -365,7 +365,7 @@ export function OrganizationManagement() {
 
   return (
     <Card>
-      <CardHeader className="pb-4">
+      <CardHeader className="gap-3">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <CardTitle className="flex items-center gap-2 text-xl">
@@ -380,7 +380,7 @@ export function OrganizationManagement() {
             <RefreshCw className={`mr-2 h-4 w-4 ${refreshing ? "animate-spin" : ""}`} /> Refresh
           </Button>
         </div>
-        <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input

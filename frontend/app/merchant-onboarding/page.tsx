@@ -93,7 +93,7 @@ export default function MerchantOnboardingPage() {
   if (status === "unauthenticated") {
     return (
       <Card className="mx-auto max-w-2xl border-[#eb6c6c]/40 bg-[#eb6c6c]/5">
-        <CardContent className="space-y-4 p-6 text-center">
+        <CardContent className="space-y-4 pt-card text-center">
           <p className="text-sm text-[#8f2e2e]">
             Log in to finish setting up your merchant account.
           </p>
@@ -120,8 +120,8 @@ export default function MerchantOnboardingPage() {
   if (applying) {
     if (googleLoadError) {
       return (
-        <Card className="mx-auto mt-6 max-w-2xl border-[#eb6c6c]/40 bg-[#eb6c6c]/5">
-          <CardContent className="p-6 text-sm text-[#8f2e2e]">{googleLoadError}</CardContent>
+        <Card className="mx-auto max-w-2xl border-[#eb6c6c]/40 bg-[#eb6c6c]/5">
+          <CardContent className="pt-card text-sm text-[#8f2e2e]">{googleLoadError}</CardContent>
         </Card>
       )
     }
@@ -157,7 +157,7 @@ export default function MerchantOnboardingPage() {
   }
 
   return (
-    <div className="mx-auto w-full max-w-3xl space-y-5 px-3 pb-6 pt-2 sm:space-y-6 sm:px-0">
+    <div className="mx-auto w-full max-w-3xl space-y-5 sm:space-y-6">
       <div className="space-y-1">
         <h1 className="text-2xl font-bold text-black dark:text-white sm:text-3xl">
           Set up your merchant account
@@ -242,7 +242,7 @@ export default function MerchantOnboardingPage() {
           offers the first one instead of asking a question with no subject. */}
       {editingLocation === undefined && (
         <Card className="border-border/70">
-          <CardContent className="flex flex-col gap-3 p-5 sm:flex-row sm:items-center sm:justify-between">
+          <CardContent className="flex flex-col gap-3 pt-card sm:flex-row sm:items-center sm:justify-between">
             <p className="text-sm font-semibold text-foreground">
               {sortedUserLocations.length === 0
                 ? "Ready to list your business?"

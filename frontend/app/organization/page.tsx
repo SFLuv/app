@@ -17,12 +17,9 @@ import { OrganizationPanel } from "@/components/organization/organization-panel"
  */
 export default function OrganizationPage() {
   return (
-    <div className="mx-auto w-full max-w-5xl px-4 py-6 sm:px-6 sm:py-8">
+    <div className="mx-auto w-full max-w-5xl">
       <div className="mb-6">
         <h1 className="text-2xl font-semibold text-black dark:text-white">My Organization</h1>
-        <p className="text-sm text-muted-foreground">
-          Your organization, its roles, and who is in it.
-        </p>
       </div>
       <OrganizationPanel />
     </div>

@@ -7,7 +7,7 @@ export const metadata = {
 
 export default function UpdatePage() {
   return (
-    <main className="flex min-h-screen items-center justify-center px-4 py-10">
+    <main className="flex min-h-screen items-center justify-center px-gutter py-10">
       <div className="mx-auto w-full max-w-md text-center">
         <div className="rounded-lg border bg-card/95 p-6 shadow-sm">
           <img

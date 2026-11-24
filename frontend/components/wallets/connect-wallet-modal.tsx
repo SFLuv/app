@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useMemo, useState } from "react"
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -25,7 +25,7 @@ interface StepIndicatorProps {
 
 function StepIndicator({ currentStep, totalSteps }: StepIndicatorProps) {
   return (
-    <div className="flex items-center justify-center space-x-1 sm:space-x-2 mb-4 sm:mb-6">
+    <div className="flex items-center justify-center space-x-1 sm:space-x-2">
       {Array.from({ length: totalSteps }, (_, index) => {
         const stepNumber = index + 1
         const isActive = stepNumber === currentStep
@@ -170,15 +170,12 @@ export function ConnectWalletModal({ open, onOpenChange, importWalletFunction: i
 
   return (
     <Dialog open={open} onOpenChange={handleModalClose}>
-      <DialogContent className="w-[95vw] max-w-md mx-auto max-h-[90vh] overflow-y-auto rounded-lg">
-        <DialogHeader className="space-y-2 pb-2">
+      <DialogContent className="w-[95vw] max-w-md mx-auto max-h-[90vh] overflow-y-auto rounded-lg" aria-describedby={undefined}>
+        <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-lg sm:text-xl">
             <Wallet className="h-4 w-4 sm:h-5 sm:w-5" />
             Connect Wallet
           </DialogTitle>
-          <DialogDescription className="text-sm">
-            Import your existing wallet by providing a name and private key
-          </DialogDescription>
         </DialogHeader>
 
         <StepIndicator currentStep={currentStep} totalSteps={totalSteps} />

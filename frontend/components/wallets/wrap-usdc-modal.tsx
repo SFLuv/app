@@ -2,7 +2,8 @@
 
 import { useState } from "react"
 import { parseUnits } from "viem"
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { InfoTip } from "@/components/ui/info-tip"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -80,12 +81,16 @@ export function WrapUsdcModal({ open, onOpenChange, wallet, balance, decimals, o
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className="sm:max-w-[460px]">
+      <DialogContent className="sm:max-w-[460px]" aria-describedby={undefined}>
         <DialogHeader>
-          <DialogTitle className={USDC.accentText}>Wrap {USDC_SYMBOL} into {tokenSymbol}</DialogTitle>
-          <DialogDescription>
-            Deposit USDC to mint {tokenSymbol} 1:1 to this wallet. You may be asked to approve USDC first.
-          </DialogDescription>
+          <DialogTitle className={USDC.accentText}>
+            <span className="inline-flex items-center gap-1.5">
+              Wrap {USDC_SYMBOL} into {tokenSymbol}
+              <InfoTip>
+                Deposit USDC to mint {tokenSymbol} 1:1 to this wallet. You may be asked to approve USDC first.
+              </InfoTip>
+            </span>
+          </DialogTitle>
         </DialogHeader>
 
         <div className="space-y-4">

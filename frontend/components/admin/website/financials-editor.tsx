@@ -5,8 +5,9 @@ import { ExternalLink, FileText, Loader2, Pencil, Trash2, Undo2, Upload } from "
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { InfoTip } from "@/components/ui/info-tip"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -89,7 +90,7 @@ function DocumentFields({ draft, onChange, idPrefix }: { draft: Draft; onChange:
 
   return (
     <div className="grid gap-4 sm:grid-cols-2">
-      <div className="space-y-1">
+      <div className="space-y-2">
         <Label>What is it?</Label>
         <Select value={draft.kind} onValueChange={(kind) => onChange({ ...draft, kind: kind as FinancialKind })}>
           <SelectTrigger>
@@ -106,7 +107,7 @@ function DocumentFields({ draft, onChange, idPrefix }: { draft: Draft; onChange:
       </div>
 
       {isStatement && (
-        <div className="space-y-1">
+        <div className="space-y-2">
           <Label htmlFor={`${idPrefix}-date`}>Statement date (the day the period ends)</Label>
           <Input
             id={`${idPrefix}-date`}
@@ -121,7 +122,7 @@ function DocumentFields({ draft, onChange, idPrefix }: { draft: Draft; onChange:
         </div>
       )}
 
-      <div className="space-y-1">
+      <div className="space-y-2">
         <Label>Fiscal year (ends June 30)</Label>
         <Select value={String(draft.fiscal_year)} onValueChange={(y) => onChange({ ...draft, fiscal_year: Number(y) })}>
           <SelectTrigger>
@@ -138,7 +139,7 @@ function DocumentFields({ draft, onChange, idPrefix }: { draft: Draft; onChange:
       </div>
 
       {!isImpact && (
-        <div className="space-y-1">
+        <div className="space-y-2">
           <Label>Which part of the year?</Label>
           <Select value={draft.period} onValueChange={(period) => onChange({ ...draft, period: period as FinancialPeriod })}>
             <SelectTrigger>
@@ -155,7 +156,7 @@ function DocumentFields({ draft, onChange, idPrefix }: { draft: Draft; onChange:
         </div>
       )}
 
-      <div className="space-y-1 sm:col-span-2">
+      <div className="space-y-2 sm:col-span-2">
         <Label htmlFor={`${idPrefix}-label`}>
           Name shown on the site {draft.kind === "other" ? "" : "(optional — leave blank to use the standard name)"}
         </Label>
@@ -359,11 +360,13 @@ export function FinancialsEditor() {
     <div className="space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle>Add a document</CardTitle>
-          <CardDescription>
-            Upload a financial statement, tax filing or annual impact report. It is published on the Financials and
-            Reports page within about 30 seconds, filed under the right year and quarter automatically.
-          </CardDescription>
+          <CardTitle className="flex items-center gap-2">
+            Add a document
+            <InfoTip>
+              Upload a financial statement, tax filing or annual impact report. It is published on the Financials and
+              Reports page within about 30 seconds, filed under the right year and quarter automatically.
+            </InfoTip>
+          </CardTitle>
         </CardHeader>
         <CardContent className="space-y-5">
           <DocumentFields draft={draft} onChange={setDraft} idPrefix="add" />
@@ -402,8 +405,10 @@ export function FinancialsEditor() {
 
       <Card>
         <CardHeader>
-          <CardTitle>On the website now</CardTitle>
-          <CardDescription>Everything visitors can see on the Financials and Reports page.</CardDescription>
+          <CardTitle className="flex items-center gap-2">
+            On the website now
+            <InfoTip>Everything visitors can see on the Financials and Reports page.</InfoTip>
+          </CardTitle>
         </CardHeader>
         <CardContent className="space-y-6">
           {impact.length > 0 && (
@@ -437,8 +442,10 @@ export function FinancialsEditor() {
       {removed.length > 0 && (
         <Card>
           <CardHeader>
-            <CardTitle className="text-lg">Recently removed</CardTitle>
-            <CardDescription>These are hidden from the website. Restore one to put it back.</CardDescription>
+            <CardTitle className="flex items-center gap-2 text-lg">
+              Recently removed
+              <InfoTip>These are hidden from the website. Restore one to put it back.</InfoTip>
+            </CardTitle>
           </CardHeader>
           <CardContent>
             <div className="divide-y rounded-lg border">
@@ -462,10 +469,14 @@ export function FinancialsEditor() {
       )}
 
       <Dialog open={editing !== null} onOpenChange={(open) => !open && setEditing(null)}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="max-w-2xl" aria-describedby={undefined}>
           <DialogHeader>
-            <DialogTitle>Edit document</DialogTitle>
-            <DialogDescription>Change how it is filed or named, or replace the file. Leave the file alone to keep the current one.</DialogDescription>
+            <DialogTitle>
+              <span className="inline-flex items-center gap-1.5">
+                Edit document
+                <InfoTip>Change how it is filed or named, or replace the file. Leave the file alone to keep the current one.</InfoTip>
+              </span>
+            </DialogTitle>
           </DialogHeader>
           <DocumentFields draft={editDraft} onChange={setEditDraft} idPrefix="edit" />
           <div className="space-y-2">

@@ -10,7 +10,8 @@ import { Pagination } from "@/components/opportunities/pagination"
 import { Button } from "@/components/ui/button"
 import { ArrowLeft } from "lucide-react"
 import { useTransactions } from "@/context/TransactionProvider"
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { InfoTip } from "@/components/ui/info-tip"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { useChainConfig } from "@/context/ChainConfigProvider"
@@ -369,13 +370,13 @@ export default function TransactionsPage() {
             <Button
               variant="outline"
               size="sm"
-              className="ml-11 h-8 w-fit px-2 text-[11px] sm:ml-0 sm:h-9 sm:px-3 sm:text-xs"
+              className="ml-12 h-8 w-fit px-2 text-[11px] sm:ml-0 sm:h-9 sm:px-3 sm:text-xs"
               onClick={() => setHistoricalModalOpen(true)}
             >
               Get Historical Balance
             </Button>
           </div>
-          <div className="mt-2 pl-11 sm:pl-12">
+          <div className="mt-2 pl-12">
             <span className="inline-flex items-center gap-1.5 rounded-md border bg-muted/40 px-2 py-1 text-[11px] sm:text-xs">
               <span className="font-medium text-foreground">{wallet?.name || "Wallet"}</span>
               <span className="font-mono text-muted-foreground">{displayWalletAddress}</span>
@@ -384,7 +385,7 @@ export default function TransactionsPage() {
         </div>
       </div>
 
-      <div className="mx-auto w-full max-w-5xl space-y-4 px-3 py-4 sm:space-y-6 sm:px-6 sm:py-6">
+      <div className="mx-auto w-full max-w-5xl space-y-4 px-3 pt-4 sm:space-y-6 sm:px-6 sm:pt-6">
         <TransactionList
           wallet={walletAddress}
           transactions={transactions}
@@ -404,12 +405,14 @@ export default function TransactionsPage() {
       <TransactionModal transaction={selectedTransaction} wallet={walletAddress} isOpen={isModalOpen} onClose={handleCloseModal} />
 
       <Dialog open={historicalModalOpen} onOpenChange={setHistoricalModalOpen}>
-        <DialogContent className="sm:max-w-[520px]">
+        <DialogContent className="sm:max-w-[520px]" aria-describedby={undefined}>
           <DialogHeader>
-            <DialogTitle>Historical Balance</DialogTitle>
-            <DialogDescription>
-              Select a day to see the balance at the end of that day (23:59).
-            </DialogDescription>
+            <DialogTitle>
+              <span className="inline-flex items-center gap-1.5">
+                Historical Balance
+                <InfoTip>Select a day to see the balance at the end of that day (23:59).</InfoTip>
+              </span>
+            </DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             <div className="grid gap-2">

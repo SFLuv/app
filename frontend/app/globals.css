@@ -42,6 +42,16 @@
     --sidebar-ring: 4 72% 60%;
 
     --radius: 0.75rem;
+    /* Toast tints (components/ui/toaster.tsx). */
+    --toast-success-bg: 140 60% 95%;
+    --toast-success-border: 142 45% 74%;
+    --toast-success-text: 145 65% 20%;
+    --toast-warning-bg: 46 95% 92%;
+    --toast-warning-border: 42 80% 62%;
+    --toast-warning-text: 30 80% 24%;
+    --toast-error-bg: 0 85% 96%;
+    --toast-error-border: 0 75% 80%;
+    --toast-error-text: 0 70% 34%;
   }
 
   .dark {
@@ -81,6 +91,15 @@
     --sidebar-accent-foreground: 0 0% 98%;
     --sidebar-border: 220 16% 24%;
     --sidebar-ring: 4 72% 60%;
+    --toast-success-bg: 148 38% 14%;
+    --toast-success-border: 145 40% 30%;
+    --toast-success-text: 140 60% 86%;
+    --toast-warning-bg: 40 45% 14%;
+    --toast-warning-border: 40 60% 34%;
+    --toast-warning-text: 45 90% 82%;
+    --toast-error-bg: 0 42% 16%;
+    --toast-error-border: 0 55% 38%;
+    --toast-error-text: 0 90% 88%;
   }
 }
 
@@ -116,6 +135,30 @@
   100% {
     top: 16px;
     opacity: 0.5;
+  }
+}
+
+/* Layout spacing (tailwind.config.ts: gutter, section, card). The page edge is
+   16 on phones, 24 on tablets and 32 on desktops; sections sit 32, 40 and 48
+   apart; a card's inset is 16, then 24. */
+@layer base {
+  :root {
+    --space-gutter: 1rem;
+    --space-section: 2rem;
+    --space-card: 1rem;
+  }
+  @media (min-width: 640px) {
+    :root {
+      --space-gutter: 1.5rem;
+      --space-section: 2.5rem;
+      --space-card: 1.5rem;
+    }
+  }
+  @media (min-width: 1024px) {
+    :root {
+      --space-gutter: 2rem;
+      --space-section: 3rem;
+    }
   }
 }
 

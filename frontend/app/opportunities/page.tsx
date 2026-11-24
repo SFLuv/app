@@ -246,7 +246,7 @@ export default function OpportunitiesPage() {
       <div className="space-y-6">
         <div className="h-10 bg-gray-200 dark:bg-gray-700 rounded animate-pulse"></div>
         <div className="h-16 bg-gray-200 dark:bg-gray-700 rounded animate-pulse"></div>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
           {[...Array(6)].map((_, i) => (
             <div key={i} className="h-64 bg-gray-200 dark:bg-gray-700 rounded animate-pulse"></div>
           ))}
@@ -257,7 +257,7 @@ export default function OpportunitiesPage() {
 
   if (error) {
     return (
-      <div className="p-8 text-center text-red-500">
+      <div className="text-center text-red-500">
         <p>Error loading opportunities: {error.message}</p>
         <Button className="mt-4" onClick={() => window.location.reload()}>
           Retry
@@ -268,10 +268,9 @@ export default function OpportunitiesPage() {
 
   return (
     <div className="space-y-6">
-      <div>
+      <div className="space-y-3">
         <h1 className="text-3xl font-bold text-black dark:text-white">Volunteer Opportunities</h1>
-        <div className="flex justify-between items-center">
-          <p className="text-gray-600 dark:text-gray-400 mt-1">Find opportunities to volunteer and earn SFLuv</p>
+        <div className="flex justify-end items-center">
           {user?.isOrganizer && (
             <Button onClick={() => setIsCreateModalOpen(true)}>
               <Plus className="mr-2 h-4 w-4" /> Create Opportunity
@@ -296,13 +295,10 @@ export default function OpportunitiesPage() {
       {paginatedOpportunities.length === 0 ? (
         <div className="text-center py-12">
           <h3 className="text-xl font-medium text-black dark:text-white">No opportunities found</h3>
-          <p className="text-gray-600 dark:text-gray-400 mt-2">
-            Try adjusting your search or filters to find opportunities
-          </p>
         </div>
       ) : (
         <>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
             {paginatedOpportunities.map((opportunity) => (
               <OpportunityCard
                 key={opportunity.id}
@@ -313,7 +309,7 @@ export default function OpportunitiesPage() {
           </div>
 
           {totalPages > 1 && (
-            <div className="mt-8">
+            <div>
               <Pagination currentPage={currentPage} totalPages={totalPages} onPageChange={handlePageChange} />
             </div>
           )}

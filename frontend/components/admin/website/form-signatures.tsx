@@ -5,8 +5,9 @@ import { ArrowLeft, Download, Loader2, Printer, Search } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { InfoTip } from "@/components/ui/info-tip"
 import { Input } from "@/components/ui/input"
 import { useAuthFetch } from "./use-auth-fetch"
 import { useNotice } from "./notice"
@@ -279,10 +280,12 @@ export function FormSignatures({ form, onBack }: { form: SiteFormSummary; onBack
 
       <Card>
         <CardHeader>
-          <CardTitle>Signatures — {form.title}</CardTitle>
-          <CardDescription>
-            Only admins can see these. Open a row for the signature itself and the exact wording that person agreed to.
-          </CardDescription>
+          <CardTitle className="flex items-center gap-2">
+            Signatures — {form.title}
+            <InfoTip>
+              Only admins can see these. Open a row for the signature itself and the exact wording that person agreed to.
+            </InfoTip>
+          </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="flex flex-wrap items-center gap-3">

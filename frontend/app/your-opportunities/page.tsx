@@ -109,7 +109,7 @@ export default function YourOpportunitiesPage() {
 
   if (error) {
     return (
-      <div className="p-8 text-center text-red-500">
+      <div className="text-center text-red-500">
         <p>Error loading opportunities: {error.message}</p>
         <Button className="mt-4" onClick={() => window.location.reload()}>
           Retry
@@ -120,10 +120,9 @@ export default function YourOpportunitiesPage() {
 
   return (
     <div className="space-y-6">
-      <div>
+      <div className="space-y-3">
         <h1 className="text-3xl font-bold text-black dark:text-white">Your Opportunities</h1>
-        <div className="flex justify-between items-center">
-          <p className="text-gray-600 dark:text-gray-400 mt-1">Manage the volunteer opportunities you've created</p>
+        <div className="flex justify-end items-center">
           <Button onClick={() => setIsCreateModalOpen(true)}>
             <Plus className="mr-2 h-4 w-4" /> Create Opportunity
           </Button>
@@ -198,7 +197,7 @@ export default function YourOpportunitiesPage() {
       </div>
 
       {totalPages > 1 && (
-        <div className="mt-4 flex justify-center">
+        <div className="flex justify-center">
           <Pagination currentPage={currentPage} totalPages={totalPages} onPageChange={handlePageChange} />
         </div>
       )}

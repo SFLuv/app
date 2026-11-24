@@ -76,7 +76,7 @@ const LocationMapPageContent = memo(function LocationMapPageContent() {
   }
 
   return (
-    <div className={`mx-auto w-full max-w-6xl space-y-3 pt-4 sm:space-y-4 sm:pt-5 ${search.get("sidebar") === "false" ? "p-4 sm:p-6" : ""}`}>
+    <div className={`mx-auto w-full max-w-6xl space-y-3 sm:space-y-4 ${search.get("sidebar") === "false" ? "px-gutter py-section" : ""}`}>
       {/*
         The type filter sits on the title line rather than over the map: it
         acts on the whole page, and the running count it used to sit beside is
@@ -85,7 +85,6 @@ const LocationMapPageContent = memo(function LocationMapPageContent() {
       <section className="flex flex-wrap items-start justify-between gap-3 px-1">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">Merchant Map</h1>
-          <p className="mt-1 text-sm text-muted-foreground sm:text-base">Places that accept SFLuv.</p>
         </div>
 
         <Select value={selectedLocationType} onValueChange={setSelectedLocationType}>

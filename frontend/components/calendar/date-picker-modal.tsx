@@ -5,7 +5,6 @@ import { Button } from "@/components/ui/button"
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -53,13 +52,12 @@ export function DatePickerModal({ isOpen, onClose, onSelectDate, currentDate }: 
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent className="sm:max-w-[425px] bg-white dark:bg-gray-900">
+      <DialogContent className="sm:max-w-[425px] bg-white dark:bg-gray-900" aria-describedby={undefined}>
         <DialogHeader>
           <DialogTitle className="text-black dark:text-white">Select Date</DialogTitle>
-          <DialogDescription>Choose the month and year to display on the calendar</DialogDescription>
         </DialogHeader>
 
-        <div className="grid gap-6 py-4">
+        <div className="grid gap-6">
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label htmlFor="month" className="text-black dark:text-white">
@@ -106,7 +104,7 @@ export function DatePickerModal({ isOpen, onClose, onSelectDate, currentDate }: 
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={onClose} className="text-black dark:text-white mr-2">
+          <Button variant="outline" onClick={onClose} className="text-black dark:text-white">
             Cancel
           </Button>
           <Button onClick={handleSubmit} className="bg-[#eb6c6c] hover:bg-[#d55c5c]">

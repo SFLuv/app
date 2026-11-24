@@ -943,10 +943,7 @@ export function LocationApprovalForm({
 
   return (
     <Card>
-      {/* pb/pt carry sm: variants because Card's own defaults do (p-5 sm:p-6,
-          p-5 pt-4 sm:pt-4) — an unqualified override is silently beaten by the
-          breakpoint rule, which is what left 40px of air under the step rail. */}
-      <CardHeader className="space-y-3 pb-3 sm:pb-3">
+      <CardHeader className="gap-3">
         <CardTitle className="text-black dark:text-white">Location Approval Form</CardTitle>
         {/* One row at every width. On a narrow screen the labels drop and the
             rail is just 1 - 2 - 3, which keeps the three steps visible as a
@@ -997,7 +994,7 @@ export function LocationApprovalForm({
         </ol>
       </CardHeader>
 
-      <CardContent className="pt-1 sm:pt-1">
+      <CardContent>
         {/* space-y-4, not 6: with the helper paragraphs gone the fields are
             short, and the wider gap left the step looking emptier than it is. */}
         <form onSubmit={handleSubmit} className="space-y-4" noValidate>
@@ -1322,7 +1319,7 @@ export function LocationApprovalForm({
             </p>
           )}
 
-          <div className="flex flex-col gap-3 sm:flex-row sm:justify-between">
+          <div className="flex flex-col gap-3 pt-2 sm:flex-row sm:justify-between">
             <Button
               type="button"
               variant="outline"

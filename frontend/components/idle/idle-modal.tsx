@@ -53,7 +53,7 @@ export function IdleModal({ open, onOpenChange, getRemainingTime }: IdleModalPro
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="w-[95vw] max-w-md mx-auto max-h-[90vh] rounded-lg overflow-y-auto">
-        <DialogHeader className="space-y-2 pb-2">
+        <DialogHeader>
           <DialogTitle className="text-lg sm:text-xl">User Idle</DialogTitle>
           {status === "authenticated" ?
             <DialogDescription className="text-sm">

@@ -126,7 +126,7 @@ export function NotificationModal({ open, id, address, emailAddress, onOpenChang
       onOpenChange(open)
     }}>
       <DialogContent className="w-[95vw] max-w-md mx-auto max-h-[90vh] rounded-lg overflow-y-auto">
-        <DialogHeader className="space-y-2 pb-2">
+        <DialogHeader>
           <DialogTitle className="text-lg sm:text-xl">Email Notifications</DialogTitle>
           <DialogDescription className="text-sm">
             {id ? "Disable" : "Enable"} notifications for {address.slice(0, 8)}...{address.slice(-6)}.
@@ -144,7 +144,7 @@ export function NotificationModal({ open, id, address, emailAddress, onOpenChang
             onSubmit={handleSubmit}
           >
             <div
-              className="space-y-4 sm:space-y-6"
+              className="space-y-2"
             >
               <Label className="text-sm font-medium">Email *</Label>
               <Input

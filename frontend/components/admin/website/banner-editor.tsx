@@ -5,7 +5,8 @@ import { ArrowDown, ArrowUp, ChevronDown, ChevronUp, History, ImageIcon, Loader2
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { InfoTip } from "@/components/ui/info-tip"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -217,7 +218,7 @@ function SlideEditor({
     <div className="grid gap-6 border-t p-4 lg:grid-cols-[1fr_auto]">
       <div className="space-y-4">
         <div className="grid gap-4 sm:grid-cols-[1fr_2fr]">
-          <div className="space-y-1">
+          <div className="space-y-2">
             <Label htmlFor={`${slide.id}-label`}>Small tag (optional)</Label>
             <Input
               id={`${slide.id}-label`}
@@ -227,7 +228,7 @@ function SlideEditor({
               onChange={(e) => patch({ label: e.target.value })}
             />
           </div>
-          <div className="space-y-1">
+          <div className="space-y-2">
             <Label htmlFor={`${slide.id}-title`}>Title</Label>
             <Input
               id={`${slide.id}-title`}
@@ -239,7 +240,7 @@ function SlideEditor({
           </div>
         </div>
 
-        <div className="space-y-1">
+        <div className="space-y-2">
           <Label htmlFor={`${slide.id}-body`}>Text (optional — keep it to a sentence)</Label>
           <Textarea
             id={`${slide.id}-body`}
@@ -274,7 +275,7 @@ function SlideEditor({
           </div>
           {slide.image_preview_url && (
             <div className="grid gap-3 sm:grid-cols-2">
-              <div className="space-y-1">
+              <div className="space-y-2">
                 <Label>Which part of the photo to show</Label>
                 <Select
                   value={knownPosition ? positionChoice : "__custom"}
@@ -294,7 +295,7 @@ function SlideEditor({
                 </Select>
                 <p className="text-xs text-muted-foreground">The card shows a wide strip, so part of a tall photo is cut off.</p>
               </div>
-              <div className="space-y-1">
+              <div className="space-y-2">
                 <Label htmlFor={`${slide.id}-alt`}>Describe the photo (for screen readers)</Label>
                 <Input
                   id={`${slide.id}-alt`}
@@ -325,11 +326,10 @@ function SlideEditor({
               }}
             />
           </div>
-          {!buttonOn && <p className="text-xs text-muted-foreground">No button: the card shows just its photo and words.</p>}
           {buttonOn && (
           <>
           <div className="grid gap-3 sm:grid-cols-2">
-            <div className="space-y-1">
+            <div className="space-y-2">
               <Label htmlFor={`${slide.id}-btn`}>Button words</Label>
               <Input
                 id={`${slide.id}-btn`}
@@ -339,7 +339,7 @@ function SlideEditor({
                 onChange={(e) => patchAction({ label: e.target.value })}
               />
             </div>
-            <div className="space-y-1">
+            <div className="space-y-2">
               <Label htmlFor={`${slide.id}-href`}>Where it goes</Label>
               <SiteLinkPicker id={`${slide.id}-href`} value={slide.action.href} onChange={pickLink} />
             </div>
@@ -350,7 +350,7 @@ function SlideEditor({
               <Label htmlFor={`${slide.id}-tab`}>Open this other website in a new tab</Label>
             </div>
           )}
-          <div className="space-y-1.5">
+          <div className="space-y-2">
             <Label>Also open a document in a new tab (optional)</Label>
             <div className="flex flex-wrap items-center gap-2">
               <Button type="button" variant="outline" size="sm" disabled={uploading !== null} onClick={() => documentInput.current?.click()}>
@@ -403,7 +403,7 @@ function SlideEditor({
           )}
         </div>
 
-        <div className="space-y-1">
+        <div className="space-y-2">
           <Label htmlFor={`${slide.id}-event`}>Link to a recurring volunteer event (optional)</Label>
           <Input
             id={`${slide.id}-event`}
@@ -527,11 +527,13 @@ export function BannerEditor() {
       <Card>
         <CardHeader className="flex flex-row items-start justify-between gap-4 space-y-0">
           <div className="space-y-1.5">
-            <CardTitle>Banner items</CardTitle>
-            <CardDescription>
-              The rotating banner on sfluv.org’s front page, one card per item. Switch a banner item off when it is over — it stays here for next time. New banner items go
-              first. Changes show on the website within about 30 seconds.
-            </CardDescription>
+            <CardTitle className="flex items-center gap-2">
+              Banner items
+              <InfoTip>
+                The rotating banner on sfluv.org’s front page, one card per item. Switch a banner item off when it is over — it stays here for next time. New banner items go
+                first. Changes show on the website within about 30 seconds.
+              </InfoTip>
+            </CardTitle>
           </div>
           <Button onClick={add}>
             <Plus className="mr-2 h-4 w-4" /> New banner item
@@ -542,7 +544,7 @@ export function BannerEditor() {
             {showing === 0 ? "Nothing is showing — the card is hidden on the homepage." : `${showing} showing on the homepage, in the order below.`}
           </p>
 
-          {slides.length === 0 && <p className="text-sm text-muted-foreground">No banner items yet. Add one to get started.</p>}
+          {slides.length === 0 && <p className="text-sm text-muted-foreground">No banner items yet.</p>}
 
           <div className="space-y-3">
             {slides.map((slide, index) => {
@@ -615,8 +617,8 @@ export function BannerEditor() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-lg">
             <History className="h-4 w-4" /> History
+            <InfoTip>Every save is kept. Restoring an older version puts it back on the site and adds it to this list.</InfoTip>
           </CardTitle>
-          <CardDescription>Every save is kept. Restoring an older version puts it back on the site and adds it to this list.</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="divide-y rounded-lg border">

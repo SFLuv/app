@@ -767,7 +767,7 @@ export function VolunteerEventsManager({
                   setOpenEvent(event)
                   onOpenEvent?.(event)
                 }}
-                className="flex w-full items-center gap-4 p-3 text-left transition-colors first:rounded-t-lg last:rounded-b-lg hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/40"
+                className="flex w-full items-center gap-4 px-4 py-3 text-left transition-colors first:rounded-t-lg last:rounded-b-lg hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/40"
               >
                 {/* Fixed thumbnail box so every row is the same height whether
                     or not the event has a photo. */}
