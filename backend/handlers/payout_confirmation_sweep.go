@@ -9,7 +9,6 @@ import (
 
 	"github.com/SFLuv/app/backend/db"
 	"github.com/SFLuv/app/backend/structs"
-	"github.com/SFLuv/app/backend/utils"
 	"github.com/ethereum/go-ethereum/common"
 )
 
@@ -259,7 +258,7 @@ func (a *AppService) concludePayoutNotSent(ctx context.Context, row *structs.Pay
 		// Marked paid by a retry that reported this row as settled without
 		// sending anything. The improver is owed this payout; reopening a paid
 		// step is left to a person.
-		a.sendUnpaidSettledPayoutEmail(row, workflowID, stepID)
+		a.notifyUnpaidSettledPayout(ctx, row, workflowID, stepID)
 		return nil
 	}
 
@@ -302,7 +301,7 @@ func workflowPayoutRef(row *structs.PayoutLedgerRow) (workflowID string, stepID 
 	return "", "", false
 }
 
-func (a *AppService) sendUnpaidSettledPayoutEmail(row *structs.PayoutLedgerRow, workflowID string, stepID string) {
+func (a *AppService) notifyUnpaidSettledPayout(ctx context.Context, row *structs.PayoutLedgerRow, workflowID string, stepID string) {
 	amount := row.AmountBase
 	if multiplier, err := getTokenMultiplier(); err == nil && multiplier.Sign() > 0 {
 		if value, ok := new(big.Int).SetString(row.AmountBase, 10); ok {
@@ -313,20 +312,19 @@ func (a *AppService) sendUnpaidSettledPayoutEmail(row *structs.PayoutLedgerRow, 
 	if stepID != "" {
 		target = "Step " + stepID
 	}
-	a.sendRoleRequestEmail(
-		"WORKFLOW_ADMIN_EMAIL",
-		"Workflow Payout Never Sent",
-		"A workflow payout is marked paid, but the money never left the faucet.",
-		fmt.Sprintf(`
-<table role="presentation" width="100%%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
-  <tr><td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280; width:180px;">Workflow ID</td><td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827; word-break:break-all;">%s</td></tr>
-  <tr><td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280;">Payout</td><td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827;">%s</td></tr>
-  <tr><td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280;">Amount</td><td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827;">%s SFLuv</td></tr>
-  <tr><td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280;">Recipient</td><td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827; word-break:break-all;">%s</td></tr>
-  <tr><td style="padding:12px 0; font-size:13px; color:#6b7280;">Ledger ID</td><td style="padding:12px 0; font-size:13px; color:#111827;">%d</td></tr>
-</table>
-<p style="font-size:13px; color:#374151;">The improver has not been paid. Send it manually or reopen the payout.</p>`,
-			utils.EscapeEmailHTML(workflowID), utils.EscapeEmailHTML(target), utils.EscapeEmailHTML(amount),
-			utils.EscapeEmailHTML(row.RecipientAddress), row.ID),
-	)
+	a.notify(ctx, Alert{
+		Topic:  structs.NotificationTopicPayoutFailure,
+		Key:    fmt.Sprintf("payout_unsent:%d", row.ID),
+		Kind:   structs.InternalKindNotice,
+		Title:  "Workflow payout never sent",
+		Body:   "A workflow payout is marked paid, but the money never left the faucet. The improver has not been paid: send it by hand or reopen the payout.",
+		Urgent: true,
+		Fields: []structs.NotificationField{
+			{Label: "Workflow ID", Value: workflowID},
+			{Label: "Payout", Value: target},
+			{Label: "Amount", Value: amount + " SFLuv"},
+			{Label: "Recipient", Value: row.RecipientAddress},
+			{Label: "Ledger ID", Value: fmt.Sprintf("%d", row.ID)},
+		},
+	})
 }

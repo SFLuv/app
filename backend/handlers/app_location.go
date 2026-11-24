@@ -247,22 +247,6 @@ func (a *AppService) AddLocation(w http.ResponseWriter, r *http.Request) {
 	// This cannot fail the request: see provisionNewLocationWallets.
 	a.provisionNewLocationWallets(r.Context(), location.ID)
 
-	a.sendRoleRequestEmail(
-		"MERCHANT_ADMIN_EMAIL",
-		"New Location Added",
-		"A new merchant location has been submitted for review.",
-		fmt.Sprintf(`
-<table role="presentation" width="100%%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
-  <tr>
-    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280; width:140px;">Location</td>
-    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827;">%s</td>
-  </tr>
-  <tr>
-    <td style="padding:12px 0; font-size:13px; color:#6b7280;">Submitted By</td>
-    <td style="padding:12px 0; font-size:13px; color:#111827; word-break:break-all;">%s</td>
-  </tr>
-</table>`, utils.EscapeEmailHTML(location.Name), utils.EscapeEmailHTML(location.OwnerID)),
-	)
 
 	a.postRoleRequestAlert(r.Context(), roleRequestAlert{
 		Role:    "merchant",

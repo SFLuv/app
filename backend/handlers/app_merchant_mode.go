@@ -9,6 +9,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/mail"
+	"os"
 	"strings"
 
 	"github.com/SFLuv/app/backend/db"
@@ -202,42 +203,52 @@ func (a *AppService) RequestMerchantModePINHelp(w http.ResponseWriter, r *http.R
 		}
 	}
 
-	emailSender := utils.NewEmailSender()
-	if emailSender == nil {
-		a.logger.Logf("merchant mode PIN help requested by %s, but email sender is not configured", *userDid)
+	// The hub is the record of the request now, and decides who hears about
+	// it; a team that wants these in the support inbox gives itself that
+	// address. One live alert per merchant, so pressing the button twice does
+	// not ask twice.
+	contactEmail := ""
+	if parsed, err := mail.ParseAddress(strings.TrimSpace(request.ContactEmail)); err == nil {
+		contactEmail = parsed.Address
+	}
+	who := *userDid
+	if identities, err := a.db.GetUserIdentities(r.Context(), []string{*userDid}); err == nil {
+		if identity, ok := identities[*userDid]; ok {
+			if name := strings.TrimSpace(identity.Name); name != "" {
+				who = name
+			}
+			if contactEmail == "" {
+				contactEmail = strings.TrimSpace(identity.Email)
+			}
+		}
+	}
+	payload := map[string]string{"user_id": *userDid, "email": contactEmail, "subject": "Merchant Mode PIN help"}
+	if base := strings.TrimRight(strings.TrimSpace(os.Getenv("APP_BASE_URL")), "/"); base != "" {
+		payload["url"] = base + "/admin"
+	}
+	if a.notifications == nil {
+		a.logger.Logf("merchant mode PIN help requested by %s, but the notification hub is not running", *userDid)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
-
-	contactEmail := strings.TrimSpace(request.ContactEmail)
-	details := fmt.Sprintf(`<table role="presentation" width="100%%" cellpadding="0" cellspacing="0">
-  <tr>
-    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280;">User ID</td>
-    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827; text-align:right;">%s</td>
-  </tr>
-  <tr>
-    <td style="padding:12px 0; font-size:13px; color:#6b7280;">Contact Email</td>
-    <td style="padding:12px 0; font-size:13px; color:#111827; text-align:right;">%s</td>
-  </tr>
-</table>`, utils.EscapeEmailHTML(*userDid), utils.EscapeEmailHTML(contactEmail))
-	htmlContent := utils.BuildStyledEmail(
-		"Merchant Mode PIN help requested",
-		"A merchant needs help resetting their Merchant Mode PIN.",
-		details,
-	)
-
-	// Reply-To only when it is a real address: Mailgun refuses the whole message
-	// over a bad header, and this email is the only record of the request.
-	replyTo := ""
-	if parsed, err := mail.ParseAddress(contactEmail); err == nil {
-		replyTo = parsed.Address
-	}
-	if err := emailSender.SendEmailWithReplyTo(utils.SupportInboxEmail(), "SFLuv Support", "Merchant Mode PIN help requested", htmlContent, utils.NotificationFromEmail(), "SFLuv Support", replyTo); err != nil {
-		a.logger.Logf("error sending merchant mode PIN help email for user %s: %s", *userDid, err.Error())
+	if err := a.notifications.Post(r.Context(), Alert{
+		Topic: structs.NotificationTopicPinHelp,
+		Key:   "pin_help:" + *userDid,
+		Kind:  structs.InternalKindNotice,
+		Title: "Merchant PIN help: " + who,
+		Body:  "A merchant is locked out of merchant mode and needs their PIN reset. Reset it in the admin panel's merchant PIN tools.",
+		Fields: []structs.NotificationField{
+			{Label: "Merchant", Value: who},
+			{Label: "Contact email", Value: contactEmail},
+			{Label: "Account", Value: *userDid},
+		},
+		Payload: payload,
+		ReplyTo: contactEmail,
+	}); err != nil {
+		a.logger.Logf("error posting merchant mode PIN help for user %s: %s", *userDid, err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
-	a.notifySupportChats(r.Context(), []supportChat{supportChatTechnical}, "Merchant Mode PIN help requested. Details are in support@.")
 
 	w.WriteHeader(http.StatusNoContent)
 }

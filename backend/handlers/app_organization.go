@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -380,6 +381,33 @@ func (a *AppService) RequestOrganizationRole(w http.ResponseWriter, r *http.Requ
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
+
+	// This used to be saved and nothing else: found only by somebody opening
+	// the admin panel's Organizations tab. One live alert per organization and
+	// role, retired when an admin sets its status.
+	roleType := strings.TrimSpace(req.RoleType)
+	payload := map[string]string{"organization_id": strconv.FormatInt(org.Id, 10), "role_type": roleType}
+	if email := strings.TrimSpace(req.Email); email != "" {
+		payload["email"] = email
+		payload["subject"] = "your organization's " + roleType + " request"
+	}
+	if base := strings.TrimRight(strings.TrimSpace(os.Getenv("APP_BASE_URL")), "/"); base != "" {
+		payload["url"] = base + "/admin"
+	}
+	a.notify(r.Context(), Alert{
+		Topic: structs.NotificationTopicOrganizationRole,
+		Key:   fmt.Sprintf("org_role:%d:%s", org.Id, roleType),
+		Kind:  structs.InternalKindNotice,
+		Title: fmt.Sprintf("%s asks to be %s", org.Name, roleType),
+		Body:  fmt.Sprintf("%s has asked for the %s role. Decide it in the admin panel's Organizations tab.", org.Name, roleType),
+		Fields: []structs.NotificationField{
+			{Label: "Organization", Value: org.Name},
+			{Label: "Role", Value: roleType},
+			{Label: "Contact email", Value: req.Email},
+			{Label: "Requested by", Value: a.notificationActor(r.Context(), userDid)},
+		},
+		Payload: payload,
+	})
 	w.WriteHeader(http.StatusCreated)
 }
 
@@ -499,6 +527,12 @@ func (a *AppService) AdminSetOrganizationRoleStatus(w http.ResponseWriter, r *ht
 		a.logger.Logf("error setting organization role status: %s", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
+	}
+	if (req.Status == "approved" || req.Status == "rejected") && a.notifications != nil {
+		key := fmt.Sprintf("org_role:%d:%s", req.OrganizationId, strings.TrimSpace(req.RoleType))
+		if err := a.notifications.Resolve(r.Context(), key, strings.ToUpper(req.Status[:1])+req.Status[1:]+" in the admin panel"); err != nil {
+			a.logger.Logf("notifications: could not retire %s: %s", key, err)
+		}
 	}
 	w.WriteHeader(http.StatusOK)
 }

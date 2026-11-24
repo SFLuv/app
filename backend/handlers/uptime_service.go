@@ -269,7 +269,7 @@ func (u *UptimeService) post(ctx context.Context, state UptimeState, recovered b
 	}
 
 	if err := u.alerts.Post(ctx, Alert{
-		Set:    structs.NotificationSetDev,
+		Topic:  structs.NotificationTopicUptime,
 		Key:    uptimeAlertKey,
 		Kind:   structs.InternalKindUptime,
 		Title:  title,

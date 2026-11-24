@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -396,9 +397,9 @@ var (
 	// Confirmation emails per recipient. The address is typed by an anonymous
 	// visitor, so without this anyone could point SFLuv's mail at a stranger.
 	siteSignEmailLimiter = newSlidingLimiter(3, 24*time.Hour)
-	// Staff alerts for withdrawals, in total. Anyone can submit the withdrawal
-	// form, so this keeps a flood of fake ones from flooding the inbox too; the
-	// submissions themselves are all still recorded.
+	// Withdrawal alerts announced one by one, in total. Anyone can submit the
+	// withdrawal form, so past this the rest are counted on one standing alert
+	// instead; the submissions themselves are all still recorded.
 	siteWithdrawalAlertLimiter = newSlidingLimiter(20, time.Hour)
 )
 
@@ -566,11 +567,13 @@ func (a *AppService) PostSignForm(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Someone asking to withdraw consent needs a person to act on it, so staff
-	// are told rather than left to notice. In the background: the visitor does
-	// not wait on it, and a mail failure changes nothing for them.
-	if summary.Kind == "withdrawal" && siteWithdrawalAlertLimiter.allow("all", time.Now()) {
-		go a.sendSiteWithdrawalAlert(version.Title, insert.SignerName, contact, answers, signedAt)
+	// Someone asking to withdraw consent needs a person to act on it, so the
+	// hub is told rather than staff being left to notice. Any other signature
+	// is worth knowing about and needs nothing done, so it goes to history.
+	if summary.Kind == "withdrawal" {
+		a.notifySiteWithdrawal(r.Context(), id, version.Title, insert.SignerName, contact, answers, signedAt)
+	} else {
+		a.notifySiteSignature(r.Context(), id, version.Title, insert.SignerName, answers, signedAt)
 	}
 
 	writeSiteJSON(w, http.StatusCreated, structs.SiteSignResponse{
@@ -578,62 +581,77 @@ func (a *AppService) PostSignForm(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// siteWithdrawalAlertTo is who hears about withdrawal requests:
-// SITE_WITHDRAWAL_ALERT_EMAIL, or admin@sfluv.org when that is unset.
-func siteWithdrawalAlertTo() string {
-	if to := strings.TrimSpace(os.Getenv("SITE_WITHDRAWAL_ALERT_EMAIL")); to != "" {
-		return to
+// notifySiteWithdrawal puts a withdrawal request in the hub, with what the
+// person entered and where to act on it. Never the signature image.
+//
+// Anyone can submit the withdrawal form, so a flood of fake ones is capped: the
+// first twenty an hour each get their own alert, and past that one standing
+// alert counts the rest. Every submission is still recorded with the form.
+func (a *AppService) notifySiteWithdrawal(ctx context.Context, signatureId any, formTitle string, name string, contact string, answers map[string]string, signedAt int64) {
+	payload := map[string]string{}
+	if base := strings.TrimRight(strings.TrimSpace(os.Getenv("APP_BASE_URL")), "/"); base != "" {
+		payload["url"] = base + "/website"
 	}
-	return "admin@sfluv.org"
-}
+	if address, err := mail.ParseAddress(contact); err == nil && strings.Contains(contact, "@") {
+		payload["email"] = address.Address
+		payload["subject"] = "your withdrawal request"
+	}
 
-// sendSiteWithdrawalAlert tells staff that someone submitted a withdrawal form,
-// with what they entered and where to act on it. It never includes the
-// signature image.
-func (a *AppService) sendSiteWithdrawalAlert(formTitle string, name string, contact string, answers map[string]string, signedAt int64) {
-	defer func() {
-		if rec := recover(); rec != nil {
-			a.logger.Logf("recovered while sending a withdrawal alert: %v", rec)
-		}
-	}()
-
-	emailSender := utils.NewEmailSender()
-	if emailSender == nil {
-		a.logger.Logf("withdrawal alert not sent: email sender is not configured")
+	if !siteWithdrawalAlertLimiter.allow("all", time.Now()) {
+		a.notify(ctx, Alert{
+			Topic:   structs.NotificationTopicFormWithdrawal,
+			Key:     "site_withdrawal:flood",
+			Kind:    structs.InternalKindNotice,
+			Title:   "Many withdrawal requests on sfluv.org",
+			Body:    "More than twenty withdrawal requests arrived within an hour, so the rest are not announced one by one. Each is recorded under Website → Forms & waivers → Signatures. The latest: " + formTitle + ", from " + name + ".",
+			Payload: payload,
+			Urgent:  true,
+		})
 		return
 	}
 
-	row := func(label string, value string) string {
-		if strings.TrimSpace(value) == "" {
-			value = "—"
-		}
-		return fmt.Sprintf(`<tr><td style="padding:8px 0; font-size:13px; color:#6b7280; width:150px;">%s</td><td style="padding:8px 0; font-size:13px; color:#111827;">%s</td></tr>`,
-			utils.EscapeEmailHTML(label), utils.EscapeEmailHTML(value))
-	}
-	rows := `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">`
-	rows += row("Name", name)
+	fields := []structs.NotificationField{{Label: "Name", Value: name}}
 	if answers["preferred_name"] != "" {
-		rows += row("Preferred name", answers["preferred_name"])
+		fields = append(fields, structs.NotificationField{Label: "Preferred name", Value: answers["preferred_name"]})
 	}
-	rows += row("Email or phone", contact)
+	fields = append(fields, structs.NotificationField{Label: "Email or phone", Value: contact})
 	if answers["event"] != "" {
-		rows += row("Event / project", answers["event"])
+		fields = append(fields, structs.NotificationField{Label: "Event / project", Value: answers["event"]})
 	}
-	rows += row("Submitted", time.Unix(signedAt, 0).In(sfluvTimeZone).Format("January 2, 2006 at 3:04 PM MST"))
-	rows += `</table>`
+	fields = append(fields, structs.NotificationField{
+		Label: "Submitted", Value: time.Unix(signedAt, 0).In(sfluvTimeZone).Format("January 2, 2006 at 3:04 PM MST"),
+	})
 
-	next := "Find this person's original signature under Website → Forms &amp; waivers → Signatures, open it, and mark their consent as withdrawn."
-	if base := strings.TrimRight(strings.TrimSpace(os.Getenv("APP_BASE_URL")), "/"); base != "" {
-		next = fmt.Sprintf(`Find this person's original signature in the <a href="%s/website" style="color:#8f2e2e;">Website tools</a> (Forms &amp; waivers → Signatures), open it, and mark their consent as withdrawn.`,
-			utils.EscapeEmailHTML(base))
-	}
-	rows += `<p style="margin:18px 0 4px; font-size:13px; line-height:1.55; color:#111827;">` + next + `</p>`
+	a.notify(ctx, Alert{
+		Topic:   structs.NotificationTopicFormWithdrawal,
+		Key:     fmt.Sprintf("site_withdrawal:%v", signatureId),
+		Kind:    structs.InternalKindNotice,
+		Title:   "Withdrawal request: " + formTitle,
+		Body:    "Someone asked to withdraw their consent on sfluv.org. Find their original signature in the Website tools (Forms & waivers → Signatures), open it, and mark their consent as withdrawn.",
+		Fields:  fields,
+		Payload: payload,
+	})
+}
 
-	title := "Withdrawal request: " + formTitle
-	htmlContent := utils.BuildStyledEmail(title, "Someone asked to withdraw their consent on sfluv.org.", rows)
-	if err := emailSender.SendEmail(siteWithdrawalAlertTo(), "SFLuv", title, htmlContent, utils.NotificationFromEmail(), "SFLuv website"); err != nil {
-		a.logger.Logf("error sending withdrawal alert: %s", err)
+// notifySiteSignature tells the hub a form was signed. Informational: it goes
+// straight to history, and only to a team that asked for signatures.
+func (a *AppService) notifySiteSignature(ctx context.Context, signatureId any, formTitle string, name string, answers map[string]string, signedAt int64) {
+	fields := []structs.NotificationField{{Label: "Name", Value: name}}
+	if answers["event"] != "" {
+		fields = append(fields, structs.NotificationField{Label: "Event / project", Value: answers["event"]})
 	}
+	fields = append(fields, structs.NotificationField{
+		Label: "Signed", Value: time.Unix(signedAt, 0).In(sfluvTimeZone).Format("January 2, 2006 at 3:04 PM MST"),
+	})
+	a.notify(ctx, Alert{
+		Topic:         structs.NotificationTopicFormSignature,
+		Key:           fmt.Sprintf("site_signature:%v", signatureId),
+		Kind:          structs.InternalKindNotice,
+		Title:         "Signed: " + formTitle,
+		Body:          name + " signed " + formTitle + " on sfluv.org.",
+		Fields:        fields,
+		Informational: true,
+	})
 }
 
 // decodeSiteBodyLimited reads a JSON body already wrapped in MaxBytesReader.

@@ -12,64 +12,7 @@ import "time"
 // which is why each one declares how it ends rather than all of them sharing a
 // dismiss button.
 
-// Notification sets. A member is designated to receive one or more of these,
-// and a set is the unit of subscription — not individual alert kinds, because
-// the useful grouping is by who cares rather than by what broke.
-//
-// Only the house organization has sets today. Partner organizations will want
-// their own eventually, which is why subscriptions are scoped to an
-// organization rather than being a global flag on a user.
-const (
-	// NotificationSetDev is infrastructure: balances running out, the backend
-	// not answering. Nobody outside the people who can fix those wants them.
-	NotificationSetDev = "dev"
-	// NotificationSetAdmin is work waiting on a human decision — somebody
-	// asking to become an affiliate, a merchant, an improver.
-	NotificationSetAdmin = "admin"
-	// NotificationSetSupport is the public "get in touch" queue.
-	NotificationSetSupport = "support"
-)
-
-// NotificationSetDefinition describes one set for the settings screen.
-type NotificationSetDefinition struct {
-	Id    string `json:"id"`
-	Label string `json:"label"`
-	// Description is shown under the label. It says what arrives and roughly
-	// how often, because "do you want admin alerts" is unanswerable without
-	// knowing whether that means twice a day or forty times an hour.
-	Description string `json:"description"`
-}
-
-// NotificationSetCatalog is every set a member can be designated for.
-func NotificationSetCatalog() []NotificationSetDefinition {
-	return []NotificationSetDefinition{
-		{
-			Id:          NotificationSetDev,
-			Label:       "Dev alerts",
-			Description: "Protocol accounts running low on gas or rewards, and the backend failing its health check. Quiet unless something is wrong.",
-		},
-		{
-			Id:          NotificationSetAdmin,
-			Label:       "Admin alerts",
-			Description: "Affiliate, merchant and improver requests waiting on a decision. Approve or reject them from the notification itself.",
-		},
-		{
-			Id:          NotificationSetSupport,
-			Label:       "Support requests",
-			Description: "Messages sent through the website's Get in touch form. Carries the sender's email and their message.",
-		},
-	}
-}
-
-// IsNotificationSet reports whether a set id is one we know.
-func IsNotificationSet(id string) bool {
-	for _, set := range NotificationSetCatalog() {
-		if set.Id == id {
-			return true
-		}
-	}
-	return false
-}
+// Notification groups, topics and teams are in notification_hub.go.
 
 // Internal alert kinds. The kind selects the action buttons, so adding a kind
 // without adding it to the handler's registry gives an alert with no buttons
@@ -88,6 +31,11 @@ const (
 	// InternalKindSupportRequest is a website support message. Archiving it
 	// retires the alert and marks the request archived in the admin panel.
 	InternalKindSupportRequest = "support_request"
+	// InternalKindNotice is anything else a person has to look at: a content
+	// report, a W-9 that needs help, a payout that failed. One button, "Mark
+	// handled", plus a reply link when there is somebody to reply to and an
+	// open link when there is somewhere to go.
+	InternalKindNotice = "notice"
 )
 
 // Resolutions: how an alert ended, kept on the history row.
@@ -98,6 +46,9 @@ const (
 	ResolutionActed = "acted"
 	// ResolutionAcked means somebody said they had seen it, and nothing else.
 	ResolutionAcked = "acked"
+	// ResolutionInformational is a notification that never asked for anything:
+	// it is delivered and goes straight to history.
+	ResolutionInformational = "info"
 )
 
 // NotificationField is one label/value detail row under an alert's body.
@@ -156,13 +107,16 @@ type UserNotification struct {
 
 // InternalNotificationDetail is the alert half of a notification row.
 type InternalNotificationDetail struct {
-	Id        int64               `json:"id"`
-	Set       string              `json:"set"`
-	SetLabel  string              `json:"set_label"`
-	AlertKey  string              `json:"alert_key"`
-	Fields    []NotificationField `json:"fields,omitempty"`
-	Urgent    bool                `json:"urgent"`
-	UpdatedAt time.Time           `json:"updated_at"`
+	Id       int64  `json:"id"`
+	Set      string `json:"set"`
+	SetLabel string `json:"set_label"`
+	// Topic is what it is about, the unit teams are routed by.
+	Topic      string              `json:"topic,omitempty"`
+	TopicLabel string              `json:"topic_label,omitempty"`
+	AlertKey   string              `json:"alert_key"`
+	Fields     []NotificationField `json:"fields,omitempty"`
+	Urgent     bool                `json:"urgent"`
+	UpdatedAt  time.Time           `json:"updated_at"`
 	// Actions is empty for an alert that retires itself, which is the honest
 	// representation: there is nothing a person can do about a low balance
 	// from a phone except put money in the account.
@@ -191,10 +145,12 @@ type NotificationFeed struct {
 	// plus live internal alerts, which is "things outstanding" rather than
 	// "things unread": an alert somebody has glanced at is still unhandled.
 	UnseenCount int `json:"unseen_count"`
-	// Sets names which sets this user receives, so the screen can say why an
-	// alert reached them and, when they receive none, say that instead of
-	// showing an empty list with no explanation.
+	// Sets names which groups this user receives through their teams, so the
+	// screen can say why an alert reached them and, when they receive none, say
+	// that instead of showing an empty list with no explanation.
 	Sets []string `json:"sets"`
+	// Teams names the notification teams this user is on.
+	Teams []string `json:"teams"`
 }
 
 // NotificationSeenRequest marks ordinary notifications seen. Ids are the
@@ -223,47 +179,4 @@ type NotificationActionResponse struct {
 	Message string `json:"message"`
 	// Feed is the caller's refreshed feed, so a press needs no follow-up read.
 	Feed *NotificationFeed `json:"feed,omitempty"`
-}
-
-// OrganizationNotificationRecipient is one member's subscriptions, for the
-// organization settings screen.
-type OrganizationNotificationRecipient struct {
-	UserId string   `json:"user_id"`
-	Name   string   `json:"name,omitempty"`
-	Email  string   `json:"email,omitempty"`
-	Role   string   `json:"role"`
-	Sets   []string `json:"sets"`
-	// SupportCategories narrows which support requests reach this person.
-	//
-	// Empty means every category, which is what somebody on the support set has
-	// always received — so a recipient who has never touched this keeps getting
-	// everything. Only meaningful alongside the support set; a person not on
-	// that set receives none of it whatever is listed here.
-	SupportCategories []string `json:"support_categories"`
-}
-
-// OrganizationNotificationSettings is the settings payload.
-type OrganizationNotificationSettings struct {
-	Catalog    []NotificationSetDefinition         `json:"catalog"`
-	Recipients []OrganizationNotificationRecipient `json:"recipients"`
-	CanEdit    bool                                `json:"can_edit"`
-	// LiveCounts is how many unresolved alerts each set currently holds, shown
-	// beside the set so somebody deciding whether to subscribe can see what
-	// they would be signing up for.
-	LiveCounts map[string]int `json:"live_counts"`
-	// SupportCategoryCatalog is the categories a support recipient can narrow
-	// to. Sent with the settings so the screen does not hard-code a list that
-	// the website and the backend both own.
-	SupportCategoryCatalog []SupportCategoryDefinition `json:"support_category_catalog"`
-}
-
-// SetOrganizationNotificationSetsRequest replaces one member's subscriptions.
-type SetOrganizationNotificationSetsRequest struct {
-	UserId string   `json:"user_id"`
-	Sets   []string `json:"sets"`
-	// SupportCategories replaces the member's category narrowing. Nil leaves it
-	// alone, so a caller that predates categories can still set sets without
-	// silently widening somebody back to everything; an empty slice clears it,
-	// which means every category.
-	SupportCategories []string `json:"support_categories"`
 }

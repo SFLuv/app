@@ -56,9 +56,8 @@ type InternalAlert struct {
 	Fields         []structs.NotificationField
 	Payload        map[string]string
 	Urgent         bool
-	// SupportCategory is only set for support requests; empty everywhere else,
-	// where it reads as uncategorised and reaches the whole set.
-	SupportCategory string
+	// Topic is what the alert is about, and decides which teams receive it.
+	Topic string
 }
 
 // PostInternalAlert puts an alert on the board, or refreshes the one already
@@ -83,9 +82,9 @@ func (a *AppDB) PostInternalAlert(ctx context.Context, alert InternalAlert) (int
 	var created bool
 	err = a.db.QueryRow(ctx, `
 		INSERT INTO internal_notifications
-			(organization_id, notification_set, alert_key, kind, title, body, fields, payload, urgent, support_category)
+			(organization_id, notification_set, alert_key, kind, title, body, fields, payload, urgent, topic)
 		VALUES
-			($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9, NULLIF($10, ''))
+			($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9, $10)
 		ON CONFLICT (organization_id, alert_key) WHERE resolved_at IS NULL
 		DO UPDATE SET
 			title = EXCLUDED.title,
@@ -93,7 +92,7 @@ func (a *AppDB) PostInternalAlert(ctx context.Context, alert InternalAlert) (int
 			fields = EXCLUDED.fields,
 			payload = EXCLUDED.payload,
 			urgent = EXCLUDED.urgent,
-			support_category = EXCLUDED.support_category,
+			topic = EXCLUDED.topic,
 			notification_set = EXCLUDED.notification_set,
 			kind = EXCLUDED.kind,
 			-- Only when something actually changed. A sweep that finds the same
@@ -112,7 +111,7 @@ func (a *AppDB) PostInternalAlert(ctx context.Context, alert InternalAlert) (int
 	`,
 		alert.OrganizationId, alert.Set, alert.AlertKey, alert.Kind,
 		alert.Title, alert.Body, string(fields), string(payload), alert.Urgent,
-		alert.SupportCategory,
+		alert.Topic,
 	).Scan(&id, &created)
 	if err != nil {
 		return 0, false, fmt.Errorf("error posting internal alert %s: %w", alert.AlertKey, err)
@@ -120,58 +119,36 @@ func (a *AppDB) PostInternalAlert(ctx context.Context, alert InternalAlert) (int
 	return id, created, nil
 }
 
-// DeliverInternalAlert gives every subscriber of the alert's set a row in their
-// own ledger, and returns the users who had not already received it.
+// DeliverInternalAlertTo gives each of these users a row in their own ledger,
+// and returns the ones who had not already received it.
 //
-// Returning only the new recipients is what keeps a push from repeating: a
-// member who subscribes to a set while an alert is already live gets the alert
-// (which is right — it is still true) and gets it once.
-func (a *AppDB) DeliverInternalAlert(ctx context.Context, notificationId int64) ([]string, error) {
+// Who the users are is the hub's routing (see NotificationDeliveryPlan), not
+// this query's. Returning only the new recipients is what keeps a push from
+// repeating: somebody added to a team while an alert is live gets it once, the
+// next time it is posted.
+func (a *AppDB) DeliverInternalAlertTo(ctx context.Context, notificationId int64, userIds []string) ([]string, error) {
+	if len(userIds) == 0 {
+		return []string{}, nil
+	}
 	rows, err := a.db.Query(ctx, `
 		INSERT INTO user_notifications
 			(user_id, kind, title, body, data, internal_notification_id, created_at)
 		SELECT
-			s.user_id,
+			recipient,
 			n.kind,
 			n.title,
 			n.body,
-			jsonb_build_object('type', 'internal_' || n.kind, 'notification_set', n.notification_set),
+			jsonb_build_object('type', 'internal_' || n.kind, 'notification_set', n.notification_set, 'topic', n.topic),
 			n.id,
 			n.created_at
 		FROM internal_notifications n
-		JOIN organization_notification_subscriptions s
-			ON s.organization_id = n.organization_id
-			AND s.notification_set = n.notification_set
+		CROSS JOIN UNNEST($2::text[]) AS recipient
 		WHERE n.id = $1
 		AND n.resolved_at IS NULL
-		-- Category routing, and the default is what makes this safe to deploy.
-		--
-		-- Three ways to pass: the alert has no category (every alert that is
-		-- not a support request, and any support request whose category we do
-		-- not recognise); this person has narrowed nothing, which means they
-		-- want all of them; or they have asked for this category specifically.
-		--
-		-- So nobody's delivery changes until they choose to narrow it. Reading
-		-- an empty subscription set as "none" instead would have stopped
-		-- support requests reaching every current recipient the moment this
-		-- shipped.
-		AND (
-			n.support_category IS NULL
-			OR NOT EXISTS (
-				SELECT 1 FROM support_category_subscriptions c
-				WHERE c.organization_id = n.organization_id AND c.user_id = s.user_id
-			)
-			OR EXISTS (
-				SELECT 1 FROM support_category_subscriptions c
-				WHERE c.organization_id = n.organization_id
-				AND c.user_id = s.user_id
-				AND c.category = n.support_category
-			)
-		)
 		ON CONFLICT (internal_notification_id, user_id) WHERE internal_notification_id IS NOT NULL
 		DO NOTHING
 		RETURNING user_id;
-	`, notificationId)
+	`, notificationId, userIds)
 	if err != nil {
 		return nil, fmt.Errorf("error delivering internal alert %d: %w", notificationId, err)
 	}
@@ -260,12 +237,12 @@ func (a *AppDB) LiveInternalAlert(ctx context.Context, organizationId int64, ale
 	row := &InternalAlertRow{}
 	var fields, payload []byte
 	err := a.db.QueryRow(ctx, `
-		SELECT id, organization_id, notification_set, alert_key, kind, title, body,
+		SELECT id, organization_id, notification_set, topic, alert_key, kind, title, body,
 			fields, payload, urgent, created_at, updated_at
 		FROM internal_notifications
 		WHERE organization_id = $1 AND alert_key = $2 AND resolved_at IS NULL;
 	`, organizationId, alertKey).Scan(
-		&row.Id, &row.OrganizationId, &row.Set, &row.AlertKey, &row.Kind, &row.Title, &row.Body,
+		&row.Id, &row.OrganizationId, &row.Set, &row.Topic, &row.AlertKey, &row.Kind, &row.Title, &row.Body,
 		&fields, &payload, &row.Urgent, &row.CreatedAt, &row.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -284,6 +261,7 @@ type InternalAlertRow struct {
 	Id             int64
 	OrganizationId int64
 	Set            string
+	Topic          string
 	AlertKey       string
 	Kind           string
 	Title          string
@@ -302,12 +280,12 @@ func (a *AppDB) GetInternalAlertById(ctx context.Context, notificationId int64) 
 	var fields, payload []byte
 	var resolvedAt *time.Time
 	err := a.db.QueryRow(ctx, `
-		SELECT id, organization_id, notification_set, alert_key, kind, title, body,
+		SELECT id, organization_id, notification_set, topic, alert_key, kind, title, body,
 			fields, payload, urgent, created_at, updated_at, resolved_at
 		FROM internal_notifications
 		WHERE id = $1;
 	`, notificationId).Scan(
-		&row.Id, &row.OrganizationId, &row.Set, &row.AlertKey, &row.Kind, &row.Title, &row.Body,
+		&row.Id, &row.OrganizationId, &row.Set, &row.Topic, &row.AlertKey, &row.Kind, &row.Title, &row.Body,
 		&fields, &payload, &row.Urgent, &row.CreatedAt, &row.UpdatedAt, &resolvedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -319,149 +297,6 @@ func (a *AppDB) GetInternalAlertById(ctx context.Context, notificationId int64) 
 	_ = json.Unmarshal(fields, &row.Fields)
 	_ = json.Unmarshal(payload, &row.Payload)
 	return row, resolvedAt == nil, nil
-}
-
-// ── Subscriptions ────────────────────────────────────────────────────────────
-
-// GetOrganizationNotificationSubscriptions returns which sets each member of an
-// organization receives.
-func (a *AppDB) GetOrganizationNotificationSubscriptions(ctx context.Context, organizationId int64) (map[string][]string, error) {
-	rows, err := a.db.Query(ctx, `
-		SELECT user_id, notification_set
-		FROM organization_notification_subscriptions
-		WHERE organization_id = $1
-		ORDER BY user_id, notification_set;
-	`, organizationId)
-	if err != nil {
-		return nil, fmt.Errorf("error loading notification subscriptions: %w", err)
-	}
-	defer rows.Close()
-
-	out := map[string][]string{}
-	for rows.Next() {
-		var userId, set string
-		if err := rows.Scan(&userId, &set); err != nil {
-			return nil, err
-		}
-		out[userId] = append(out[userId], set)
-	}
-	return out, rows.Err()
-}
-
-// GetUserNotificationSets returns the sets one user receives.
-func (a *AppDB) GetUserNotificationSets(ctx context.Context, userId string) ([]string, error) {
-	rows, err := a.db.Query(ctx, `
-		SELECT notification_set FROM organization_notification_subscriptions
-		WHERE user_id = $1 ORDER BY notification_set;
-	`, userId)
-	if err != nil {
-		return nil, fmt.Errorf("error loading notification sets for %s: %w", userId, err)
-	}
-	defer rows.Close()
-
-	sets := []string{}
-	for rows.Next() {
-		var set string
-		if err := rows.Scan(&set); err != nil {
-			return nil, err
-		}
-		sets = append(sets, set)
-	}
-	return sets, rows.Err()
-}
-
-// UserReceivesSet reports whether a user is designated for one set, which is
-// the authorization check for running an alert's action button.
-func (a *AppDB) UserReceivesSet(ctx context.Context, organizationId int64, userId string, set string) (bool, error) {
-	var exists bool
-	err := a.db.QueryRow(ctx, `
-		SELECT EXISTS (
-			SELECT 1 FROM organization_notification_subscriptions
-			WHERE organization_id = $1 AND user_id = $2 AND notification_set = $3
-		);
-	`, organizationId, userId, set).Scan(&exists)
-	if err != nil {
-		return false, fmt.Errorf("error checking notification subscription: %w", err)
-	}
-	return exists, nil
-}
-
-// SetOrganizationNotificationSets replaces one member's subscriptions.
-//
-// Delete-then-insert inside a transaction, rather than a diff: the request
-// carries the complete intended set, so reconstructing which rows changed would
-// be work in service of the same result.
-//
-// Newly added sets do not back-deliver what is already live. That is a
-// deliberate choice against the "an alert is a condition" grain, and it is
-// about the first hour rather than the steady state: being handed every
-// outstanding alert the moment you are added to a set is how people turn a
-// notification off. Anything still true will be re-reported by its own sweep
-// within the minute, which brings them in on their own.
-func (a *AppDB) SetOrganizationNotificationSets(
-	ctx context.Context, organizationId int64, userId string, sets []string, actor string,
-) error {
-	tx, err := a.db.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("error starting notification subscription update: %w", err)
-	}
-	defer tx.Rollback(ctx)
-
-	if _, err := tx.Exec(ctx, `
-		DELETE FROM organization_notification_subscriptions
-		WHERE organization_id = $1 AND user_id = $2;
-	`, organizationId, userId); err != nil {
-		return fmt.Errorf("error clearing notification subscriptions: %w", err)
-	}
-
-	cleaned := make([]string, 0, len(sets))
-	seen := map[string]bool{}
-	for _, set := range sets {
-		set = strings.TrimSpace(set)
-		if set == "" || seen[set] || !structs.IsNotificationSet(set) {
-			continue
-		}
-		seen[set] = true
-		cleaned = append(cleaned, set)
-	}
-
-	if len(cleaned) > 0 {
-		if _, err := tx.Exec(ctx, `
-			INSERT INTO organization_notification_subscriptions
-				(organization_id, user_id, notification_set, created_by)
-			SELECT $1, $2, UNNEST($3::text[]), $4
-			ON CONFLICT DO NOTHING;
-		`, organizationId, userId, cleaned, actor); err != nil {
-			return fmt.Errorf("error saving notification subscriptions: %w", err)
-		}
-	}
-
-	return tx.Commit(ctx)
-}
-
-// LiveInternalAlertCounts is how many unresolved alerts sit in each set.
-func (a *AppDB) LiveInternalAlertCounts(ctx context.Context, organizationId int64) (map[string]int, error) {
-	rows, err := a.db.Query(ctx, `
-		SELECT notification_set, COUNT(*)
-		FROM internal_notifications
-		WHERE organization_id = $1 AND resolved_at IS NULL
-		GROUP BY notification_set;
-	`, organizationId)
-	if err != nil {
-		return nil, fmt.Errorf("error counting live alerts: %w", err)
-	}
-	defer rows.Close()
-
-	out := map[string]int{}
-	for rows.Next() {
-		var set string
-		var count int
-		if err := rows.Scan(&set, &count); err != nil {
-			return nil, err
-		}
-		out[set] = count
-	}
-	return out, rows.Err()
 }
 
 // ── The per-user ledger ──────────────────────────────────────────────────────
@@ -544,11 +379,12 @@ func (a *AppDB) GetNotificationFeed(
 		History: []structs.UserNotification{},
 	}
 
-	sets, err := a.GetUserNotificationSets(ctx, userId)
+	sets, teams, err := a.GetUserNotificationTeams(ctx, userId)
 	if err != nil {
 		return nil, err
 	}
 	feed.Sets = sets
+	feed.Teams = teams
 
 	// Active: an ordinary notification is active until it has been seen; an
 	// internal alert is active until it is resolved, whether or not anybody
@@ -558,7 +394,7 @@ func (a *AppDB) GetNotificationFeed(
 	activeRows, err := a.db.Query(ctx, `
 		SELECT
 			un.id, un.kind, un.title, un.body, un.data, un.created_at, un.seen_at,
-			n.id, n.notification_set, n.alert_key, n.fields, n.payload, n.urgent, n.updated_at,
+			n.id, n.notification_set, n.topic, n.alert_key, n.fields, n.payload, n.urgent, n.updated_at,
 			n.resolved_at, n.outcome
 		FROM user_notifications un
 		LEFT JOIN internal_notifications n ON n.id = un.internal_notification_id
@@ -614,7 +450,7 @@ func (a *AppDB) GetNotificationFeed(
 	historyRows, err := a.db.Query(ctx, fmt.Sprintf(`
 		SELECT
 			un.id, un.kind, un.title, un.body, un.data, un.created_at, un.seen_at,
-			n.id, n.notification_set, n.alert_key, n.fields, n.payload, n.urgent, n.updated_at,
+			n.id, n.notification_set, n.topic, n.alert_key, n.fields, n.payload, n.urgent, n.updated_at,
 			n.resolved_at, n.outcome
 		FROM user_notifications un
 		LEFT JOIN internal_notifications n ON n.id = un.internal_notification_id
@@ -654,14 +490,14 @@ func scanNotifications(rows pgx.Rows) ([]structs.UserNotification, error) {
 		var seenAt *time.Time
 
 		var internalId *int64
-		var set, alertKey, outcome *string
+		var set, topic, alertKey, outcome *string
 		var fields, payload []byte
 		var urgent *bool
 		var updatedAt, resolvedAt *time.Time
 
 		if err := rows.Scan(
 			&item.Id, &item.Kind, &item.Title, &item.Body, &data, &item.CreatedAt, &seenAt,
-			&internalId, &set, &alertKey, &fields, &payload, &urgent, &updatedAt,
+			&internalId, &set, &topic, &alertKey, &fields, &payload, &urgent, &updatedAt,
 			&resolvedAt, &outcome,
 		); err != nil {
 			return nil, fmt.Errorf("error scanning notification: %w", err)
@@ -677,6 +513,7 @@ func scanNotifications(rows pgx.Rows) ([]structs.UserNotification, error) {
 				Id:       *internalId,
 				AlertKey: derefString(alertKey),
 				Set:      derefString(set),
+				Topic:    derefString(topic),
 				Urgent:   urgent != nil && *urgent,
 				Resolved: resolvedAt != nil,
 				Outcome:  derefString(outcome),
@@ -867,73 +704,4 @@ func (a *AppDB) AcknowledgeInternalAlert(
 	ctx context.Context, notificationId int64, userId string, outcome string,
 ) (bool, error) {
 	return a.ResolveInternalAlertById(ctx, notificationId, structs.ResolutionAcked, userId, outcome)
-}
-
-// GetSupportCategorySubscriptions is each member's category narrowing, for the
-// settings screen. A member absent from the map has narrowed nothing, which
-// means every category.
-func (a *AppDB) GetSupportCategorySubscriptions(ctx context.Context, orgId int64) (map[string][]string, error) {
-	rows, err := a.db.Query(ctx, `
-		SELECT user_id, category
-		FROM support_category_subscriptions
-		WHERE organization_id = $1
-		ORDER BY user_id, category;
-	`, orgId)
-	if err != nil {
-		return nil, fmt.Errorf("error loading support category subscriptions for org %d: %w", orgId, err)
-	}
-	defer rows.Close()
-
-	out := map[string][]string{}
-	for rows.Next() {
-		var userId, category string
-		if err := rows.Scan(&userId, &category); err != nil {
-			return nil, fmt.Errorf("error scanning support category subscription: %w", err)
-		}
-		out[userId] = append(out[userId], category)
-	}
-	return out, rows.Err()
-}
-
-// SetSupportCategorySubscriptions replaces one member's narrowing.
-//
-// An empty list removes every row, which restores "all categories" rather than
-// meaning "none" — the same rule the delivery query implements, and the reason
-// it is safe for somebody to clear their selection by unticking everything.
-// Unknown categories are dropped rather than refused, so a stale client cannot
-// write a routing key nothing matches.
-func (a *AppDB) SetSupportCategorySubscriptions(ctx context.Context, orgId int64, userId string, categories []string) error {
-	tx, err := a.db.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("error starting support category update: %w", err)
-	}
-	defer tx.Rollback(ctx)
-
-	if _, err := tx.Exec(ctx, `
-		DELETE FROM support_category_subscriptions
-		WHERE organization_id = $1 AND user_id = $2;
-	`, orgId, userId); err != nil {
-		return fmt.Errorf("error clearing support categories for %s: %w", userId, err)
-	}
-
-	seen := map[string]struct{}{}
-	for _, category := range categories {
-		category = structs.SupportCategoryOrEmpty(category)
-		if category == "" {
-			continue
-		}
-		if _, dup := seen[category]; dup {
-			continue
-		}
-		seen[category] = struct{}{}
-		if _, err := tx.Exec(ctx, `
-			INSERT INTO support_category_subscriptions(organization_id, user_id, category)
-			VALUES ($1, $2, $3)
-			ON CONFLICT DO NOTHING;
-		`, orgId, userId, category); err != nil {
-			return fmt.Errorf("error adding support category %s for %s: %w", category, userId, err)
-		}
-	}
-
-	return tx.Commit(ctx)
 }

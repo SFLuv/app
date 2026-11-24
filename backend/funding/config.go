@@ -26,9 +26,6 @@ const (
 	DefaultConfigFile = "funding-accounts.json"
 	// EnvConfigFile points at a config kept outside the image.
 	EnvConfigFile = "FUNDING_CONFIG_FILE"
-	// EnvAlertEmails is the comma-separated list told when the faucet is low.
-	// Empty falls back to the site admin address.
-	EnvAlertEmails = "FUNDING_ALERT_EMAILS"
 	// EnvAutoTopUp overrides the file's "enabled" field, so moving funds can be
 	// switched on or off without editing a file or shipping a deploy.
 	//
@@ -277,28 +274,6 @@ func (c Config) LoadedFrom() string { return c.loadedFrom }
 
 // Err is the load failure, if any.
 func (c Config) Err() error { return c.loadErr }
-
-// AlertEmails is who to tell when the faucet is low.
-//
-// FUNDING_ALERT_EMAILS is a comma-separated list. When it is empty the site
-// admin address is used, so an unconfigured deployment still tells somebody
-// rather than nobody.
-func AlertEmails(fallback string) []string {
-	out := []string{}
-	seen := map[string]bool{}
-	for entry := range strings.SplitSeq(os.Getenv(EnvAlertEmails), ",") {
-		address := strings.TrimSpace(entry)
-		if address == "" || seen[strings.ToLower(address)] {
-			continue
-		}
-		seen[strings.ToLower(address)] = true
-		out = append(out, address)
-	}
-	if len(out) == 0 && strings.TrimSpace(fallback) != "" {
-		out = append(out, strings.TrimSpace(fallback))
-	}
-	return out
-}
 
 // ── Units ────────────────────────────────────────────────────────────────────
 

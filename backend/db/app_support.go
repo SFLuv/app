@@ -29,6 +29,34 @@ func NewSupportReference() (string, error) {
 	return sb.String(), nil
 }
 
+// SupportRequestByEmailMessageId finds the request a received email already
+// made, or nil.
+func (a *AppDB) SupportRequestByEmailMessageId(ctx context.Context, messageId string) (*structs.SupportRequest, error) {
+	var id int64
+	err := a.db.QueryRow(ctx, `SELECT id FROM support_requests WHERE email_message_id = $1;`, messageId).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("error looking up email %s: %w", messageId, err)
+	}
+	return a.GetSupportRequest(ctx, id)
+}
+
+// SetSupportRequestEmailMessageId records which email a request came from.
+// Reports false when another request already holds that id, which is a retry
+// of the same delivery racing this one.
+func (a *AppDB) SetSupportRequestEmailMessageId(ctx context.Context, id int64, messageId string) (bool, error) {
+	_, err := a.db.Exec(ctx, `UPDATE support_requests SET email_message_id = $2 WHERE id = $1;`, id, messageId)
+	if isUniqueViolation(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("error recording the email behind support request %d: %w", id, err)
+	}
+	return true, nil
+}
+
 // CreateSupportRequest stores a submission, generating its reference.
 //
 // A reference collision is astronomically unlikely but not impossible, and

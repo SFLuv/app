@@ -587,26 +587,6 @@ func (a *AppService) RequestProposerStatus(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	a.sendRoleRequestEmail(
-		"PROPOSER_ADMIN_EMAIL",
-		"New Proposer Request",
-		"A user has requested proposer status.",
-		fmt.Sprintf(`
-<table role="presentation" width="100%%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
-  <tr>
-    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280; width:140px;">User</td>
-    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827; word-break:break-all;">%s</td>
-  </tr>
-  <tr>
-    <td style="padding:12px 0; font-size:13px; color:#6b7280;">Organization</td>
-    <td style="padding:12px 0; font-size:13px; color:#111827;">%s</td>
-  </tr>
-  <tr>
-    <td style="padding:12px 0; font-size:13px; color:#6b7280;">Notification Email</td>
-    <td style="padding:12px 0; font-size:13px; color:#111827;">%s</td>
-  </tr>
-</table>`, utils.EscapeEmailHTML(proposer.UserId), utils.EscapeEmailHTML(proposer.Organization), utils.EscapeEmailHTML(proposer.Email)),
-	)
 
 	a.postRoleRequestAlert(r.Context(), roleRequestAlert{
 		Role:    "proposer",
@@ -704,30 +684,6 @@ func (a *AppService) RequestImproverStatus(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	a.sendRoleRequestEmail(
-		"IMPROVER_ADMIN_EMAIL",
-		"New Improver Request",
-		"A user has requested improver status.",
-		fmt.Sprintf(`
-<table role="presentation" width="100%%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
-  <tr>
-    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280; width:140px;">User</td>
-    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827; word-break:break-all;">%s</td>
-  </tr>
-  <tr>
-    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280;">First Name</td>
-    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827;">%s</td>
-  </tr>
-  <tr>
-    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280;">Last Name</td>
-    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827;">%s</td>
-  </tr>
-  <tr>
-    <td style="padding:12px 0; font-size:13px; color:#6b7280;">Email</td>
-    <td style="padding:12px 0; font-size:13px; color:#111827;">%s</td>
-  </tr>
-</table>`, utils.EscapeEmailHTML(improver.UserId), utils.EscapeEmailHTML(improver.FirstName), utils.EscapeEmailHTML(improver.LastName), utils.EscapeEmailHTML(improver.Email)),
-	)
 
 	a.postRoleRequestAlert(r.Context(), roleRequestAlert{
 		Role:    "improver",
@@ -884,26 +840,16 @@ func (a *AppService) RequestSupervisorStatus(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	a.sendRoleRequestEmail(
-		"SUPERVISOR_ADMIN_EMAIL",
-		"New Supervisor Request",
-		"A user has requested supervisor status.",
-		fmt.Sprintf(`
-<table role="presentation" width="100%%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
-  <tr>
-    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280; width:140px;">User</td>
-    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827; word-break:break-all;">%s</td>
-  </tr>
-  <tr>
-    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280;">Organization</td>
-    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827;">%s</td>
-  </tr>
-  <tr>
-    <td style="padding:12px 0; font-size:13px; color:#6b7280;">Notification Email</td>
-    <td style="padding:12px 0; font-size:13px; color:#111827;">%s</td>
-  </tr>
-</table>`, utils.EscapeEmailHTML(supervisor.UserId), utils.EscapeEmailHTML(supervisor.Organization), utils.EscapeEmailHTML(supervisor.Email)),
-	)
+	a.postRoleRequestAlert(r.Context(), roleRequestAlert{
+		Role:    "supervisor",
+		Subject: supervisor.UserId,
+		Label:   strings.TrimSpace(supervisor.Organization),
+		Fields: []structs.NotificationField{
+			{Label: "Organization", Value: supervisor.Organization},
+			{Label: "Email", Value: supervisor.Email},
+			{Label: "User", Value: supervisor.UserId},
+		},
+	})
 
 	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(supervisor)
@@ -950,6 +896,7 @@ func (a *AppService) UpdateSupervisor(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
+	a.resolveRoleRequestDecision(r.Context(), "supervisor", req.UserId, req.Status)
 
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(supervisor)
@@ -1155,6 +1102,16 @@ func (a *AppService) CreateWorkflow(w http.ResponseWriter, r *http.Request) {
 		a.logger.Logf("error creating workflow for proposer %s: %s", *userDid, errMsg)
 		writeWorkflowCreateError(w, http.StatusInternalServerError, "proposer_workflow_db.internal", "Unable to create workflow because an internal workflow database operation failed.", "")
 		return
+	}
+	if workflow.Status == "pending" {
+		a.notifyWorkflowProposal(r.Context(), "workflow_proposal:"+workflow.Id, "New workflow to vote on: "+workflow.Title,
+			"A proposer submitted a workflow. It needs votes before it can run.",
+			[]structs.NotificationField{
+				{Label: "Workflow", Value: workflow.Title},
+				{Label: "Proposer", Value: a.notificationActor(r.Context(), workflow.ProposerId)},
+				{Label: "Total bounty", Value: fmt.Sprintf("%d SFLuv", workflow.TotalBounty)},
+				{Label: "Starts", Value: time.Unix(workflow.StartAt, 0).In(sfluvTimeZone).Format("January 2, 2006 at 3:04 PM MST")},
+			})
 	}
 	if workflow.Status == "approved" {
 		go a.sendWorkflowProposalOutcomeEmailByWorkflow(context.Background(), workflow.Id)
@@ -3866,6 +3823,14 @@ func (a *AppService) ProposeWorkflowEdit(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	a.notifyWorkflowProposal(r.Context(), "workflow_edit:"+proposal.Id, "Workflow change to vote on: "+proposal.WorkflowTitle,
+		"A proposer asked to change a running workflow. It needs votes.",
+		[]structs.NotificationField{
+			{Label: "Workflow", Value: proposal.WorkflowTitle},
+			{Label: "Reason", Value: proposal.Reason},
+			{Label: "Requested by", Value: a.notificationActor(r.Context(), proposal.RequestedByUserId)},
+		})
+
 	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(proposal)
 }
@@ -3983,6 +3948,7 @@ func (a *AppService) VoteWorkflowEditProposal(w http.ResponseWriter, r *http.Req
 	}
 	sanitizeWorkflowEditProposalForVoteView(updatedProposal)
 
+	a.resolveWorkflowProposalAlert(r.Context(), "workflow_edit:"+updatedProposal.Id, updatedProposal.Status)
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(updatedProposal)
 }
@@ -4031,6 +3997,7 @@ func (a *AppService) AdminForceApproveWorkflowEditProposal(w http.ResponseWriter
 	}
 	sanitizeWorkflowEditProposalForVoteView(updatedProposal)
 
+	a.resolveWorkflowProposalAlert(r.Context(), "workflow_edit:"+updatedProposal.Id, updatedProposal.Status)
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(updatedProposal)
 }
@@ -4086,6 +4053,19 @@ func (a *AppService) ProposeWorkflowDeletion(w http.ResponseWriter, r *http.Requ
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
+
+	deletionTitle := ""
+	if proposal.TargetWorkflowTitle != nil {
+		deletionTitle = *proposal.TargetWorkflowTitle
+	}
+	a.notifyWorkflowProposal(r.Context(), "workflow_deletion:"+proposal.Id, "Workflow deletion to vote on: "+deletionTitle,
+		"Somebody asked to delete a workflow. It needs votes.",
+		[]structs.NotificationField{
+			{Label: "Workflow", Value: deletionTitle},
+			{Label: "Deletes", Value: proposal.TargetType},
+			{Label: "Reason", Value: proposal.Reason},
+			{Label: "Requested by", Value: a.notificationActor(r.Context(), proposal.RequestedByUserId)},
+		})
 
 	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(proposal)
@@ -4193,6 +4173,7 @@ func (a *AppService) VoteWorkflowDeletionProposal(w http.ResponseWriter, r *http
 		updatedProposal.Votes = proposalWithVotes.Votes
 	}
 
+	a.resolveWorkflowProposalAlert(r.Context(), "workflow_deletion:"+updatedProposal.Id, updatedProposal.Status)
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(updatedProposal)
 }
@@ -4240,6 +4221,7 @@ func (a *AppService) AdminForceApproveWorkflowDeletionProposal(w http.ResponseWr
 		return
 	}
 
+	a.resolveWorkflowProposalAlert(r.Context(), "workflow_deletion:"+updatedProposal.Id, updatedProposal.Status)
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(updatedProposal)
 }
@@ -4494,6 +4476,12 @@ func (a *AppService) DecideIssuerCredentialRequest(w http.ResponseWriter, r *htt
 		return
 	}
 
+	if a.notifications != nil {
+		if err := a.notifications.Resolve(r.Context(), "credential_request:"+requestId,
+			"Decided by an issuer: "+strings.TrimSpace(req.Status)); err != nil {
+			a.logger.Logf("notifications: could not retire credential request %s: %s", requestId, err)
+		}
+	}
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(updated)
 }
@@ -4691,7 +4679,39 @@ func (a *AppService) sendWorkflowProposalOutcomeEmailByWorkflow(ctx context.Cont
 		a.logger.Logf("error building workflow proposal outcome notification for %s: %s", workflowId, err)
 		return
 	}
+	// Decided, so the hub's "to vote on" alert has nothing left to ask.
+	a.resolveWorkflowProposalAlert(ctx, "workflow_proposal:"+workflowId, notification.Decision)
 	a.sendWorkflowProposalOutcomeEmail(*notification)
+}
+
+// notifyWorkflowProposal tells the hub something is waiting on votes. Until
+// this, nobody was told: voters found proposals by opening /voter.
+func (a *AppService) notifyWorkflowProposal(ctx context.Context, key string, title string, body string, fields []structs.NotificationField) {
+	payload := map[string]string{}
+	if base := strings.TrimRight(strings.TrimSpace(os.Getenv("APP_BASE_URL")), "/"); base != "" {
+		payload["url"] = base + "/voter"
+	}
+	a.notify(ctx, Alert{
+		Topic:   structs.NotificationTopicWorkflowProposal,
+		Key:     key,
+		Kind:    structs.InternalKindNotice,
+		Title:   title,
+		Body:    body,
+		Fields:  fields,
+		Payload: payload,
+	})
+}
+
+// resolveWorkflowProposalAlert retires a proposal's alert once its vote is no
+// longer pending.
+func (a *AppService) resolveWorkflowProposalAlert(ctx context.Context, key string, status string) {
+	status = strings.TrimSpace(status)
+	if a.notifications == nil || status == "" || status == "pending" {
+		return
+	}
+	if err := a.notifications.Resolve(ctx, key, "Vote decided: "+strings.ReplaceAll(status, "_", " ")); err != nil {
+		a.logger.Logf("notifications: could not retire %s: %s", key, err)
+	}
 }
 
 func (a *AppService) sendWorkflowProposalOutcomeEmail(notification structs.WorkflowProposalOutcomeNotification) {
@@ -4771,32 +4791,57 @@ func (a *AppService) sendWorkflowProposalExpiredEmail(notification structs.Workf
 	}
 }
 
-func (a *AppService) sendRoleRequestEmail(envKey string, title string, subtitle string, details string) {
-	adminEmail := strings.TrimSpace(os.Getenv(envKey))
-	if adminEmail == "" {
-		adminEmail = strings.TrimSpace(os.Getenv("AFFILIATE_ADMIN_EMAIL"))
+// notifyCredentialRequest tells the hub about a credential request. Issuers
+// holding the credential are partner organizations and are still emailed
+// directly below, because the decision is theirs; the hub is so the team knows,
+// and so a request no issuer can grant does not sit unseen.
+func (a *AppService) notifyCredentialRequest(ctx context.Context, request structs.CredentialRequest, issuers int) {
+	requester := strings.TrimSpace(request.RequesterName)
+	if requester == "" {
+		requester = strings.TrimSpace(request.RequesterFirstName + " " + request.RequesterLastName)
 	}
-	if adminEmail == "" {
-		return
+	if requester == "" {
+		requester = request.UserId
 	}
-
-	emailSender := utils.NewEmailSender()
-	if emailSender == nil {
-		return
+	body := fmt.Sprintf("%s asked for the %s credential. %d issuer account(s) can grant it and were emailed.", requester, request.CredentialType, issuers)
+	urgent := false
+	if issuers < 0 {
+		body = fmt.Sprintf("%s asked for the %s credential. The backend could not check which issuers can grant it, so none were emailed.", requester, request.CredentialType)
+		urgent = true
+	} else if issuers == 0 {
+		body = fmt.Sprintf("%s asked for the %s credential, and no issuer can grant it. Nobody outside the team has been told.", requester, request.CredentialType)
+		urgent = true
 	}
-
-	htmlContent := utils.BuildStyledEmail(title, subtitle, details)
-	if err := emailSender.SendEmail(adminEmail, "Admin", title, htmlContent, utils.NotificationFromEmail(), "SFLuv Workflows"); err != nil {
-		a.logger.Logf("error sending %s email: %s", title, err.Error())
+	payload := map[string]string{}
+	if email := strings.TrimSpace(request.RequesterEmail); email != "" {
+		payload["email"] = email
+		payload["subject"] = "your credential request"
 	}
+	a.notify(ctx, Alert{
+		Topic: structs.NotificationTopicCredentialReq,
+		Key:   "credential_request:" + request.Id,
+		Kind:  structs.InternalKindNotice,
+		Title: "Credential request: " + request.CredentialType,
+		Body:  body,
+		Fields: []structs.NotificationField{
+			{Label: "Requester", Value: requester},
+			{Label: "Email", Value: request.RequesterEmail},
+			{Label: "Credential", Value: request.CredentialType},
+			{Label: "Issuers emailed", Value: fmt.Sprintf("%d", issuers)},
+		},
+		Payload: payload,
+		Urgent:  urgent,
+	})
 }
 
 func (a *AppService) sendCredentialRequestEmails(ctx context.Context, request structs.CredentialRequest) {
 	recipients, err := a.db.GetIssuersAllowedForCredential(ctx, request.CredentialType)
 	if err != nil {
 		a.logger.Logf("error loading issuer recipients for credential request %s: %s", request.Id, err)
+		a.notifyCredentialRequest(ctx, request, -1)
 		return
 	}
+	a.notifyCredentialRequest(ctx, request, len(recipients))
 	if len(recipients) == 0 {
 		return
 	}
@@ -4902,46 +4947,26 @@ func (a *AppService) sendWorkflowSeriesFundingShortfallEmails(ctx context.Contex
 		}
 
 		shortfallTokens := new(big.Int).Sub(requiredTokens, unallocatedTokens)
-		a.sendRoleRequestEmail(
-			"WORKFLOW_ADMIN_EMAIL",
-			"Workflow Series Funding Shortfall",
-			"A series workflow reached start time with insufficient unallocated faucet balance.",
-			fmt.Sprintf(`
-<table role="presentation" width="100%%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
-  <tr>
-    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280; width:170px;">Workflow</td>
-    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827;">%s</td>
-  </tr>
-  <tr>
-    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280;">Workflow ID</td>
-    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827; word-break:break-all;">%s</td>
-  </tr>
-  <tr>
-    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280;">Series ID</td>
-    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827; word-break:break-all;">%s</td>
-  </tr>
-  <tr>
-    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280;">Recurrence</td>
-    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827;">%s</td>
-  </tr>
-  <tr>
-    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280;">Start At (UTC)</td>
-    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827;">%s</td>
-  </tr>
-  <tr>
-    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280;">Required Unallocated</td>
-    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827;">%s SFLuv</td>
-  </tr>
-  <tr>
-    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280;">Current Unallocated</td>
-    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827;">%s SFLuv</td>
-  </tr>
-  <tr>
-    <td style="padding:12px 0; font-size:13px; color:#6b7280;">Amount Needed</td>
-    <td style="padding:12px 0; font-size:13px; color:#111827; font-weight:600;">%s SFLuv</td>
-  </tr>
-</table>`, utils.EscapeEmailHTML(check.WorkflowTitle), utils.EscapeEmailHTML(check.WorkflowId), utils.EscapeEmailHTML(check.SeriesId), utils.EscapeEmailHTML(check.Recurrence), utils.EscapeEmailHTML(time.Unix(check.StartAt, 0).UTC().Format(time.RFC3339)), utils.EscapeEmailHTML(requiredTokens.String()), utils.EscapeEmailHTML(unallocatedTokens.String()), utils.EscapeEmailHTML(shortfallTokens.String())),
-		)
+		a.notify(ctx, Alert{
+			Topic: structs.NotificationTopicPayoutFunding,
+			// One live alert per workflow: the check runs again at every start
+			// time, and a shortfall that persists is the same shortfall.
+			Key:   "series_funding:" + check.WorkflowId,
+			Kind:  structs.InternalKindNotice,
+			Title: "Workflow funding shortfall: " + check.WorkflowTitle,
+			Body:  "A recurring workflow reached its start time with too little unallocated in the faucet to cover it.",
+			Fields: []structs.NotificationField{
+				{Label: "Workflow", Value: check.WorkflowTitle},
+				{Label: "Workflow ID", Value: check.WorkflowId},
+				{Label: "Series ID", Value: check.SeriesId},
+				{Label: "Recurrence", Value: check.Recurrence},
+				{Label: "Starts (UTC)", Value: time.Unix(check.StartAt, 0).UTC().Format(time.RFC3339)},
+				{Label: "Required", Value: requiredTokens.String() + " SFLuv"},
+				{Label: "Unallocated now", Value: unallocatedTokens.String() + " SFLuv"},
+				{Label: "Short by", Value: shortfallTokens.String() + " SFLuv"},
+			},
+			Urgent: true,
+		})
 	}
 }
 
@@ -5083,7 +5108,7 @@ func (a *AppService) attemptWorkflowPayoutTransfer(ctx context.Context, target w
 	return nil, neededTokens, false, "", false, fmt.Errorf("payout service is not configured")
 }
 
-func (a *AppService) sendWorkflowPayoutErrorEmail(
+func (a *AppService) notifyWorkflowPayoutError(
 	ctx context.Context,
 	target workflowPayoutTarget,
 	walletAddress string,
@@ -5116,88 +5141,44 @@ func (a *AppService) sendWorkflowPayoutErrorEmail(
 		targetDetails = "Workflow manager completion payout"
 	}
 
-	extraRows := ""
+	fields := []structs.NotificationField{
+		{Label: "Workflow", Value: target.WorkflowTitle},
+		{Label: "Workflow ID", Value: target.WorkflowId},
+		{Label: "Series ID", Value: target.SeriesId},
+		{Label: targetLabel, Value: targetDetails},
+		{Label: "Improver", Value: improverName + " (" + target.ImproverId + ")"},
+		{Label: "Improver email", Value: improverEmail},
+		{Label: "Payout wallet", Value: strings.TrimSpace(walletAddress)},
+		{Label: "Amount", Value: fmt.Sprintf("%d SFLuv", target.Amount)},
+	}
 	if isInsufficient && currentBalance != nil && neededBalance != nil {
 		shortfall := new(big.Int).Sub(new(big.Int).Set(neededBalance), currentBalance)
 		if shortfall.Sign() < 0 {
 			shortfall = big.NewInt(0)
 		}
-		extraRows = fmt.Sprintf(`
-  <tr>
-    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280;">Current Faucet Balance</td>
-    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827;">%s SFLuv</td>
-  </tr>
-  <tr>
-    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280;">Needed For This Payout</td>
-    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827;">%s SFLuv</td>
-  </tr>
-  <tr>
-    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280;">Amount Needed</td>
-    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827; font-weight:600;">%s SFLuv</td>
-  </tr>`, utils.EscapeEmailHTML(currentBalance.String()), utils.EscapeEmailHTML(neededBalance.String()), utils.EscapeEmailHTML(shortfall.String()))
+		fields = append(fields,
+			structs.NotificationField{Label: "Faucet balance", Value: currentBalance.String() + " SFLuv"},
+			structs.NotificationField{Label: "Needed for this payout", Value: neededBalance.String() + " SFLuv"},
+			structs.NotificationField{Label: "Short by", Value: shortfall.String() + " SFLuv"},
+		)
 	}
+	fields = append(fields, structs.NotificationField{Label: "Error", Value: errorMessage})
 
-	a.sendRoleRequestEmail(
-		"WORKFLOW_ADMIN_EMAIL",
-		"Workflow Payout Error",
-		"A workflow payout attempt failed.",
-		fmt.Sprintf(`
-<table role="presentation" width="100%%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
-  <tr>
-    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280; width:180px;">Workflow</td>
-    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827;">%s</td>
-  </tr>
-  <tr>
-    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280;">Workflow ID</td>
-    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827; word-break:break-all;">%s</td>
-  </tr>
-  <tr>
-    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280;">Series ID</td>
-    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827; word-break:break-all;">%s</td>
-  </tr>
-  <tr>
-    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280;">Target</td>
-    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827;">%s</td>
-  </tr>
-  <tr>
-    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280;">Target Details</td>
-    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827;">%s</td>
-  </tr>
-  <tr>
-    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280;">Improver</td>
-    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827;">%s (%s)</td>
-  </tr>
-  <tr>
-    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280;">Improver Email</td>
-    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827;">%s</td>
-  </tr>
-  <tr>
-    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280;">Payout Wallet</td>
-    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827; word-break:break-all;">%s</td>
-  </tr>
-  <tr>
-    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280;">Payout Amount</td>
-    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827;">%d SFLuv</td>
-  </tr>%s
-  <tr>
-    <td style="padding:12px 0; font-size:13px; color:#6b7280;">Error</td>
-    <td style="padding:12px 0; font-size:13px; color:#111827; white-space:pre-wrap;">%s</td>
-  </tr>
-</table>`,
-			utils.EscapeEmailHTML(target.WorkflowTitle),
-			utils.EscapeEmailHTML(target.WorkflowId),
-			utils.EscapeEmailHTML(target.SeriesId),
-			utils.EscapeEmailHTML(targetLabel),
-			utils.EscapeEmailHTML(targetDetails),
-			utils.EscapeEmailHTML(improverName),
-			utils.EscapeEmailHTML(target.ImproverId),
-			utils.EscapeEmailHTML(improverEmail),
-			utils.EscapeEmailHTML(strings.TrimSpace(walletAddress)),
-			target.Amount,
-			extraRows,
-			utils.EscapeEmailHTML(errorMessage),
-		),
-	)
+	which := "manager"
+	if !target.IsManager {
+		which = fmt.Sprintf("step%d", target.StepOrder)
+	}
+	a.notify(ctx, Alert{
+		Topic: structs.NotificationTopicPayoutFailure,
+		// One live alert per payout, refreshed with the latest error while it
+		// keeps failing, rather than one per attempt.
+		Key:    "payout_error:" + target.WorkflowId + ":" + which,
+		Kind:   structs.InternalKindNotice,
+		Title:  "Workflow payout failed: " + target.WorkflowTitle,
+		Body:   "A workflow payout attempt failed. The improver has not been paid.",
+		Fields: fields,
+		Urgent: true,
+	})
 }
 
 func (a *AppService) processWorkflowSeriesPayouts(ctx context.Context, triggerWorkflowID string) {
@@ -5275,7 +5256,7 @@ func (a *AppService) processWorkflowSeriesPayouts(ctx context.Context, triggerWo
 						a.logger.Logf("error recording step payout assignment failure for workflow %s step %s: %s", target.WorkflowId, target.StepId, dbErr)
 						return
 					}
-					a.sendWorkflowPayoutErrorEmail(ctx, target, walletAddress, errMsg, nil, nil, false)
+					a.notifyWorkflowPayoutError(ctx, target, walletAddress, errMsg, nil, nil, false)
 					continue
 				}
 
@@ -5286,7 +5267,7 @@ func (a *AppService) processWorkflowSeriesPayouts(ctx context.Context, triggerWo
 						a.logger.Logf("error recording step payout wallet failure for workflow %s step %s: %s", target.WorkflowId, target.StepId, dbErr)
 						return
 					}
-					a.sendWorkflowPayoutErrorEmail(ctx, target, walletAddress, fmt.Sprintf("%s Detail: %s", errMsg, err), nil, nil, false)
+					a.notifyWorkflowPayoutError(ctx, target, walletAddress, fmt.Sprintf("%s Detail: %s", errMsg, err), nil, nil, false)
 					continue
 				}
 
@@ -5330,14 +5311,14 @@ func (a *AppService) processWorkflowSeriesPayouts(ctx context.Context, triggerWo
 						a.logger.Logf("error recording step payout transfer failure for workflow %s step %s: %s", target.WorkflowId, target.StepId, dbErr)
 						return
 					}
-					a.sendWorkflowPayoutErrorEmail(ctx, target, walletAddress, fmt.Sprintf("%s Detail: %s", errMsg, transferErr), currentBalance, neededBalance, insufficient)
+					a.notifyWorkflowPayoutError(ctx, target, walletAddress, fmt.Sprintf("%s Detail: %s", errMsg, transferErr), currentBalance, neededBalance, insufficient)
 					continue
 				}
 
 				if _, err := a.db.MarkWorkflowStepPaidOut(ctx, target.WorkflowId, target.StepId); err != nil {
 					errMsg := fmt.Sprintf("workflow payout post-transfer state update failed: %s", err)
 					a.logger.Logf("error marking step payout complete for workflow %s step %s: %s", target.WorkflowId, target.StepId, err)
-					a.sendWorkflowPayoutErrorEmail(ctx, target, walletAddress, errMsg, nil, nil, false)
+					a.notifyWorkflowPayoutError(ctx, target, walletAddress, errMsg, nil, nil, false)
 					return
 				}
 			}
@@ -5394,7 +5375,7 @@ func (a *AppService) processWorkflowSeriesPayouts(ctx context.Context, triggerWo
 							return
 						}
 					}
-					a.sendWorkflowPayoutErrorEmail(ctx, target, walletAddress, errMsg, nil, nil, false)
+					a.notifyWorkflowPayoutError(ctx, target, walletAddress, errMsg, nil, nil, false)
 					continue
 				}
 
@@ -5412,7 +5393,7 @@ func (a *AppService) processWorkflowSeriesPayouts(ctx context.Context, triggerWo
 							return
 						}
 					}
-					a.sendWorkflowPayoutErrorEmail(ctx, target, walletAddress, fmt.Sprintf("%s Detail: %s", errMsg, err), nil, nil, false)
+					a.notifyWorkflowPayoutError(ctx, target, walletAddress, fmt.Sprintf("%s Detail: %s", errMsg, err), nil, nil, false)
 					continue
 				}
 
@@ -5470,7 +5451,7 @@ func (a *AppService) processWorkflowSeriesPayouts(ctx context.Context, triggerWo
 							return
 						}
 					}
-					a.sendWorkflowPayoutErrorEmail(ctx, target, walletAddress, fmt.Sprintf("%s Detail: %s", errMsg, transferErr), currentBalance, neededBalance, insufficient)
+					a.notifyWorkflowPayoutError(ctx, target, walletAddress, fmt.Sprintf("%s Detail: %s", errMsg, transferErr), currentBalance, neededBalance, insufficient)
 					continue
 				}
 
@@ -5478,14 +5459,14 @@ func (a *AppService) processWorkflowSeriesPayouts(ctx context.Context, triggerWo
 					if _, err := a.db.MarkWorkflowManagerPaidOut(ctx, target.WorkflowId); err != nil {
 						errMsg := fmt.Sprintf("workflow payout post-transfer state update failed: %s", err)
 						a.logger.Logf("error marking manager payout complete for workflow %s: %s", target.WorkflowId, err)
-						a.sendWorkflowPayoutErrorEmail(ctx, target, walletAddress, errMsg, nil, nil, false)
+						a.notifyWorkflowPayoutError(ctx, target, walletAddress, errMsg, nil, nil, false)
 						return
 					}
 				} else {
 					if _, err := a.db.MarkWorkflowStepPaidOut(ctx, target.WorkflowId, target.StepId); err != nil {
 						errMsg := fmt.Sprintf("workflow payout post-transfer state update failed: %s", err)
 						a.logger.Logf("error marking step payout complete for workflow %s step %s: %s", target.WorkflowId, target.StepId, err)
-						a.sendWorkflowPayoutErrorEmail(ctx, target, walletAddress, errMsg, nil, nil, false)
+						a.notifyWorkflowPayoutError(ctx, target, walletAddress, errMsg, nil, nil, false)
 						return
 					}
 				}
@@ -6006,26 +5987,16 @@ func (a *AppService) RequestIssuerStatus(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	a.sendRoleRequestEmail(
-		"ISSUER_ADMIN_EMAIL",
-		"New Issuer Request",
-		"A user has requested issuer status.",
-		fmt.Sprintf(`
-<table role="presentation" width="100%%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
-  <tr>
-    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280; width:140px;">User</td>
-    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827; word-break:break-all;">%s</td>
-  </tr>
-  <tr>
-    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280;">Organization</td>
-    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827;">%s</td>
-  </tr>
-  <tr>
-    <td style="padding:12px 0; font-size:13px; color:#6b7280;">Notification Email</td>
-    <td style="padding:12px 0; font-size:13px; color:#111827;">%s</td>
-  </tr>
-</table>`, utils.EscapeEmailHTML(issuer.UserId), utils.EscapeEmailHTML(issuer.Organization), utils.EscapeEmailHTML(issuer.Email)),
-	)
+	a.postRoleRequestAlert(r.Context(), roleRequestAlert{
+		Role:    "issuer",
+		Subject: issuer.UserId,
+		Label:   strings.TrimSpace(issuer.Organization),
+		Fields: []structs.NotificationField{
+			{Label: "Organization", Value: issuer.Organization},
+			{Label: "Email", Value: issuer.Email},
+			{Label: "User", Value: issuer.UserId},
+		},
+	})
 
 	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(issuer)
@@ -6072,6 +6043,7 @@ func (a *AppService) UpdateIssuerRequest(w http.ResponseWriter, r *http.Request)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
+	a.resolveRoleRequestDecision(r.Context(), "issuer", req.UserId, req.Status)
 
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(issuer)

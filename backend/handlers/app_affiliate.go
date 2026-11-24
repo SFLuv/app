@@ -3,7 +3,6 @@ package handlers
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 
@@ -59,26 +58,10 @@ func (a *AppService) RequestAffiliateStatus(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	a.sendRoleRequestEmail(
-		"AFFILIATE_ADMIN_EMAIL",
-		"New Affiliate Request",
-		"A user has requested affiliate status.",
-		fmt.Sprintf(`
-<table role="presentation" width="100%%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
-  <tr>
-    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280; width:140px;">User</td>
-    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827; word-break:break-all;">%s</td>
-  </tr>
-  <tr>
-    <td style="padding:12px 0; font-size:13px; color:#6b7280;">Organization</td>
-    <td style="padding:12px 0; font-size:13px; color:#111827;">%s</td>
-  </tr>
-</table>`, utils.EscapeEmailHTML(affiliate.UserId), utils.EscapeEmailHTML(affiliate.Organization)),
-	)
 
-	// Alongside the email, not instead of it. The email is the durable record
-	// that reaches a desk; the alert is the one with the buttons on it, and the
-	// one that stops asking the moment somebody decides.
+	// The hub decides who hears about it, and a team that wants these by email
+	// says so in its settings. The alert is the one with the buttons on it, and
+	// the one that stops asking the moment somebody decides.
 	a.postRoleRequestAlert(r.Context(), roleRequestAlert{
 		Role:    "affiliate",
 		Subject: affiliate.UserId,

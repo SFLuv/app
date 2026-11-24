@@ -68,10 +68,6 @@ func (a *AppService) notificationFeed(
 	}
 
 	isAdmin := a.IsAdmin(ctx, userId)
-	labels := map[string]string{}
-	for _, set := range structs.NotificationSetCatalog() {
-		labels[set.Id] = set.Label
-	}
 
 	decorate := func(items []structs.UserNotification) {
 		for i := range items {
@@ -79,7 +75,10 @@ func (a *AppService) notificationFeed(
 			if detail == nil {
 				continue
 			}
-			detail.SetLabel = labels[detail.Set]
+			detail.SetLabel = structs.NotificationSetLabel(detail.Set)
+			if topic, ok := structs.NotificationTopic(detail.Topic); ok {
+				detail.TopicLabel = topic.Label
+			}
 			if detail.Resolved {
 				continue
 			}
@@ -142,8 +141,8 @@ func (a *AppService) MarkNotificationsSeen(w http.ResponseWriter, r *http.Reques
 //
 //  1. Does this alert exist, and is it still live? A resolved alert's buttons
 //     do nothing, so a stale screen cannot approve something twice.
-//  2. Is this person designated for the alert's set? That is what makes it
-//     their alert at all.
+//  2. Was this person delivered the alert, through one of their teams, and are
+//     they still in the organization? That is what makes it their alert.
 //  3. Does the action exist for this alert's KIND? Looked up server-side, so
 //     the client cannot name an action belonging to a different kind.
 //  4. Does the action need admin, and do they have it? Subscription is not
@@ -192,11 +191,11 @@ func (a *AppService) PressNotificationAction(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// Designation is what makes it theirs. Global admins pass, as they do on
+	// Delivery is what makes it theirs. Global admins pass, as they do on
 	// every other guard in the app.
-	receives, err := a.db.UserReceivesSet(r.Context(), alert.OrganizationId, userId, alert.Set)
+	receives, err := a.db.UserReceivedInternalAlert(r.Context(), alert.Id, userId)
 	if err != nil {
-		a.logger.Logf("error checking notification subscription for %s: %s", userId, err)
+		a.logger.Logf("error checking who received alert %d for %s: %s", alert.Id, userId, err)
 		http.Error(w, "could not check your access", http.StatusInternalServerError)
 		return
 	}
@@ -305,151 +304,4 @@ func (a *AppService) notificationActor(ctx context.Context, userId string) strin
 		return email
 	}
 	return userId
-}
-
-// ── Organization settings ────────────────────────────────────────────────────
-
-// GetOrganizationNotificationSettings returns who receives which sets.
-//
-// Readable by any member, so somebody can see what they themselves are
-// designated for without being an admin. Writing is admin-only.
-func (a *AppService) GetOrganizationNotificationSettings(w http.ResponseWriter, r *http.Request) {
-	org, role, _, ok := a.requireOrgRole(w, r, structs.OrgRoleMember)
-	if !ok {
-		return
-	}
-	if !org.IsHouse {
-		// Deliberately not a 403. Partner organizations will have their own
-		// sets later, and until then the honest answer is that there are none
-		// rather than that the caller is not allowed to ask.
-		writeJSON(w, http.StatusOK, structs.OrganizationNotificationSettings{
-			Catalog:                []structs.NotificationSetDefinition{},
-			Recipients:             []structs.OrganizationNotificationRecipient{},
-			LiveCounts:             map[string]int{},
-			SupportCategoryCatalog: []structs.SupportCategoryDefinition{},
-		})
-		return
-	}
-
-	members, err := a.db.GetOrganizationMembersWithPermissions(r.Context(), org.Id)
-	if err != nil {
-		a.logger.Logf("error loading members for org %d: %s", org.Id, err)
-		http.Error(w, "could not load members", http.StatusInternalServerError)
-		return
-	}
-	subscriptions, err := a.db.GetOrganizationNotificationSubscriptions(r.Context(), org.Id)
-	if err != nil {
-		a.logger.Logf("error loading notification subscriptions for org %d: %s", org.Id, err)
-		http.Error(w, "could not load subscriptions", http.StatusInternalServerError)
-		return
-	}
-	counts, err := a.db.LiveInternalAlertCounts(r.Context(), org.Id)
-	if err != nil {
-		a.logger.Logf("error counting live alerts for org %d: %s", org.Id, err)
-		counts = map[string]int{}
-	}
-
-	categories, err := a.db.GetSupportCategorySubscriptions(r.Context(), org.Id)
-	if err != nil {
-		a.logger.Logf("error loading support category subscriptions for org %d: %s", org.Id, err)
-		// Not fatal. An unreadable narrowing reads as "nobody has narrowed
-		// anything", which is the delivery default, so the screen shows the
-		// widest truthful answer rather than failing to open.
-		categories = map[string][]string{}
-	}
-
-	out := structs.OrganizationNotificationSettings{
-		SupportCategoryCatalog: structs.SupportCategoryCatalog(),
-		Catalog:                structs.NotificationSetCatalog(),
-		Recipients:             make([]structs.OrganizationNotificationRecipient, 0, len(members)),
-		CanEdit:                role == structs.OrgRoleAdmin || role == structs.OrgRoleSuperadmin,
-		LiveCounts:             counts,
-	}
-	for _, member := range members {
-		sets := subscriptions[member.UserId]
-		if sets == nil {
-			sets = []string{}
-		}
-		memberCategories := categories[member.UserId]
-		if memberCategories == nil {
-			memberCategories = []string{}
-		}
-		out.Recipients = append(out.Recipients, structs.OrganizationNotificationRecipient{
-			UserId:            member.UserId,
-			Name:              member.ContactName,
-			Email:             member.ContactEmail,
-			Role:              member.Role,
-			Sets:              sets,
-			SupportCategories: memberCategories,
-		})
-	}
-
-	writeJSON(w, http.StatusOK, out)
-}
-
-// SetOrganizationNotificationSets replaces one member's subscriptions.
-func (a *AppService) SetOrganizationNotificationSets(w http.ResponseWriter, r *http.Request) {
-	org, _, actor, ok := a.requireOrgRole(w, r, structs.OrgRoleAdmin)
-	if !ok {
-		return
-	}
-	if !org.IsHouse {
-		http.Error(w, "notification sets exist only for the SFLuv organization", http.StatusForbidden)
-		return
-	}
-
-	var req structs.SetOrganizationNotificationSetsRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 32<<10)).Decode(&req); err != nil {
-		http.Error(w, "a user and their sets are required", http.StatusBadRequest)
-		return
-	}
-	req.UserId = strings.TrimSpace(req.UserId)
-	if req.UserId == "" {
-		http.Error(w, "a user is required", http.StatusBadRequest)
-		return
-	}
-	for _, set := range req.Sets {
-		if !structs.IsNotificationSet(strings.TrimSpace(set)) {
-			http.Error(w, "unknown notification set: "+set, http.StatusBadRequest)
-			return
-		}
-	}
-
-	// Only a member of this organization, so an admin cannot subscribe an
-	// arbitrary user id to the alerts by posting one.
-	role, err := a.db.GetOrganizationMemberRole(r.Context(), org.Id, req.UserId)
-	if err != nil {
-		a.logger.Logf("error loading member role: %s", err)
-		http.Error(w, "could not check that member", http.StatusInternalServerError)
-		return
-	}
-	if role == "" {
-		http.Error(w, "that user is not a member of this organization", http.StatusBadRequest)
-		return
-	}
-
-	if err := a.db.SetOrganizationNotificationSets(r.Context(), org.Id, req.UserId, req.Sets, actor); err != nil {
-		a.logger.Logf("error saving notification subscriptions: %s", err)
-		http.Error(w, "could not save that", http.StatusInternalServerError)
-		return
-	}
-
-	// Nil leaves the narrowing alone, so a client that predates categories can
-	// still save sets without silently widening somebody back to everything.
-	// An empty slice clears it, which is how a person un-narrows.
-	if req.SupportCategories != nil {
-		for _, category := range req.SupportCategories {
-			if !structs.IsSupportCategory(strings.ToLower(strings.TrimSpace(category))) {
-				http.Error(w, "unknown support category: "+category, http.StatusBadRequest)
-				return
-			}
-		}
-		if err := a.db.SetSupportCategorySubscriptions(r.Context(), org.Id, req.UserId, req.SupportCategories); err != nil {
-			a.logger.Logf("error saving support categories: %s", err)
-			http.Error(w, "could not save that", http.StatusInternalServerError)
-			return
-		}
-	}
-
-	w.WriteHeader(http.StatusOK)
 }

@@ -2923,13 +2923,21 @@ var schemaMigrations = []SchemaMigration{
 		},
 	},
 	{
-		// 1.86, not 1.85: pjol/notification-alignment claims 1.85 for the
-		// notification hub. Whichever of the two reaches main second must keep
-		// the higher number, or a database already past it skips it for good.
+		// 1.86: chat mentions, merged to main first (#238).
 		Version:     "1.86",
 		Description: "chat: who a message tags, stored beside its text",
 		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
 			return migrateChatMentions(ctx, pools)
+		},
+	},
+	{
+		// 1.87, not the 1.85 this was written as: chat mentions (1.86) reached
+		// main first, and a database already past a version never applies a
+		// lower one.
+		Version:     "1.87",
+		Description: "notification hub: teams of house-organization members, topics routed to teams, and where each notification went",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			return migrateNotificationHub(ctx, pools)
 		},
 	},
 }

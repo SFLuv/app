@@ -17,7 +17,7 @@ import { LogoCropModal } from "./logo-crop-modal"
 import { formatCredentialLabel } from "@/lib/credential-labels"
 import type { OrgMemberEndpoints, OrganizationView, OrgRoleType } from "@/types/organization"
 import { MemberDirectory } from "@/components/organization/member-directory"
-import { NotificationSets } from "@/components/organization/notification-sets"
+import { NotificationHub } from "@/components/organization/notification-hub"
 
 const roleLabels: Record<OrgRoleType, string> = {
   affiliate: "Affiliate",
@@ -366,7 +366,9 @@ export function OrganizationPanel() {
         onChanged={() => void load()}
       />
 
-      <NotificationSets members={view.members} canManage={isAdmin} />
+      {/* SFLuv's own organization only: notification teams are made of its
+          members, and the hub refuses any other organization. */}
+      {org.is_house ? <NotificationHub /> : null}
 
       <LogoCropModal open={cropOpen} onOpenChange={setCropOpen} src={cropSrc} onCropped={(dataUrl) => void saveLogo(dataUrl)} />
 

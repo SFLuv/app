@@ -8,11 +8,12 @@ import (
 	"github.com/SFLuv/app/backend/structs"
 )
 
-// Role requests, posted to the admin set.
+// Role requests, posted to the hub under each role's own topic.
 //
-// These sit alongside the emails that already go out rather than replacing
-// them. The emails are what reach somebody at a desk; the alert is what can be
-// decided from a phone, and what stops asking the moment one person decides it.
+// These replace the *_ADMIN_EMAIL emails that used to go out beside them. A
+// team that wants a request in an inbox asks for email in its settings; the
+// alert itself is what can be decided from a phone, and what stops asking the
+// moment one person decides it.
 //
 // The alert is a condition — "this request is waiting on a decision" — so the
 // key is the subject rather than the moment, and a duplicate request cannot
@@ -20,7 +21,8 @@ import (
 
 // roleRequestAlert is one request waiting on a decision.
 type roleRequestAlert struct {
-	// Role is "affiliate", "improver", "merchant" or "proposer", and selects
+	// Role is "affiliate", "improver", "merchant", "proposer", "supervisor"
+	// or "issuer", and selects
 	// which code the approve button runs. A role added here without a case in
 	// runRoleDecisionAction produces buttons that fail, so the two lists are
 	// changed together.
@@ -38,10 +40,12 @@ type roleRequestAlert struct {
 
 // roleRequestTitles are the human names for each role.
 var roleRequestTitles = map[string]string{
-	"affiliate": "Affiliate request",
-	"improver":  "Improver request",
-	"merchant":  "Merchant approval",
-	"proposer":  "Proposer request",
+	"affiliate":  "Affiliate request",
+	"improver":   "Improver request",
+	"merchant":   "Merchant approval",
+	"proposer":   "Proposer request",
+	"supervisor": "Supervisor request",
+	"issuer":     "Issuer request",
 }
 
 // postRoleRequestAlert puts a pending request in front of the admin set.
@@ -68,7 +72,7 @@ func (a *AppService) postRoleRequestAlert(ctx context.Context, alert roleRequest
 	fields := append([]structs.NotificationField{{Label: "Who", Value: label}}, alert.Fields...)
 
 	if err := a.notifications.Post(ctx, Alert{
-		Set:    structs.NotificationSetAdmin,
+		Topic:  structs.NotificationTopicForRole(alert.Role),
 		Key:    fmt.Sprintf("role:%s:%s", alert.Role, alert.Subject),
 		Kind:   structs.InternalKindRoleRequest,
 		Title:  title,

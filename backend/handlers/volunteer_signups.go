@@ -246,12 +246,34 @@ func (s *BotService) SignUpForVolunteerEvent(w http.ResponseWriter, r *http.Requ
 		}
 	}
 
-	// Load the event only when a confirmation email is actually going out.
 	eventTitle, eventStartAt := "your volunteer event", int64(0)
-	if result.ConfirmToken != "" {
-		if row, err := s.db.GetPublicVolunteerEvent(r.Context(), eventId); err == nil && row != nil {
-			eventTitle, eventStartAt = row.Title, row.StartAt
+	if row, err := s.db.GetPublicVolunteerEvent(r.Context(), eventId); err == nil && row != nil {
+		eventTitle, eventStartAt = row.Title, row.StartAt
+	}
+
+	// The organizer and the team used to hear nothing; only the volunteer got
+	// an email. Informational, so it goes to history and only to a team that
+	// asked for signups.
+	if s.app != nil {
+		volunteer := strings.TrimSpace(params.FirstName + " " + params.LastName)
+		if volunteer == "" {
+			volunteer = params.Email
 		}
+		spots := fmt.Sprintf("%d", result.SpotsRemaining)
+		s.app.notify(r.Context(), Alert{
+			Topic:         structs.NotificationTopicEventSignup,
+			Key:           fmt.Sprintf("event_signup:%v", result.SignupId),
+			Kind:          structs.InternalKindNotice,
+			Title:         "Signed up: " + eventTitle,
+			Body:          volunteer + " signed up for " + eventTitle + ".",
+			Informational: true,
+			Fields: []structs.NotificationField{
+				{Label: "Volunteer", Value: volunteer},
+				{Label: "Email", Value: params.Email},
+				{Label: "From", Value: params.Source},
+				{Label: "Spots left", Value: spots},
+			},
+		})
 	}
 
 	signupStatus := "confirmed"
