@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect, useMemo, useRef, useCallback } from "react"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Send, QrCode, Eye, EyeOff, RefreshCw, ArrowLeft, ArrowDownLeft, Wallet, Pencil, Check, X, BellOff, Bell, Copy, ArrowLeftRight } from "lucide-react"
@@ -507,8 +507,7 @@ export default function WalletDetailsPage() {
       <div className="min-h-screen bg-background flex items-center justify-center">
         <div className="text-center">
           <Wallet className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-          <h2 className="text-xl font-semibold mb-2">No Wallet Found</h2>
-          <p className="text-muted-foreground mb-4">Please connect a wallet to continue</p>
+          <h2 className="text-xl font-semibold mb-4">No Wallet Found</h2>
           <Button onClick={() => router.push("/wallets")}>Go to Wallets</Button>
         </div>
       </div>
@@ -620,7 +619,7 @@ export default function WalletDetailsPage() {
       </div>
 
       {/* Main Content with proper spacing */}
-      <div className="pb-6 sm:pb-8">
+      <div>
         <div className="container mx-auto px-3 sm:px-4 pt-4 sm:pt-6 space-y-4 sm:space-y-6 max-w-2xl">
           {/* Balance Card */}
           <WalletBalanceCard
@@ -728,11 +727,10 @@ export default function WalletDetailsPage() {
 
           {/* Transaction History */}
           <Card>
-            <CardHeader className="pb-2 sm:pb-3">
+            <CardHeader>
               <div className="flex items-center justify-between">
                 <div>
                   <CardTitle className="text-base sm:text-lg">Recent Activity</CardTitle>
-                  <CardDescription className="text-xs sm:text-sm">Your latest transactions</CardDescription>
                 </div>
                 <Button
                   variant="ghost"

@@ -4821,7 +4821,8 @@ func (a *AppService) notifyCredentialRequest(ctx context.Context, request struct
 		Topic: structs.NotificationTopicCredentialReq,
 		Key:   "credential_request:" + request.Id,
 		Kind:  structs.InternalKindNotice,
-		Title: "Credential request: " + request.CredentialType,
+		Title:    "Credential request: " + request.CredentialType,
+		Subtitle: requester + " · " + request.CredentialType,
 		Body:  body,
 		Fields: []structs.NotificationField{
 			{Label: "Requester", Value: requester},

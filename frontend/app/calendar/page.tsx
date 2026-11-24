@@ -170,11 +170,10 @@ export default function CalendarPage() {
     <div className="space-y-6">
       <div>
         <h1 className="text-3xl font-bold text-black dark:text-white">Volunteer Calendar</h1>
-        <p className="text-gray-600 dark:text-gray-400 mt-1">Track your volunteer opportunities</p>
       </div>
 
       <Card>
-        <CardHeader className="flex flex-row items-center justify-between pb-2">
+        <CardHeader className="flex flex-row items-center justify-between">
           <CardTitle className="text-black dark:text-white">
             {currentDate.toLocaleString("default", { month: "long", year: "numeric" })}
           </CardTitle>
@@ -229,7 +228,7 @@ export default function CalendarPage() {
         Click on an opportunity to view details or manage your registration
       </div>
 
-      <div className="flex justify-between items-center mt-6">
+      <div className="flex justify-between items-center">
         <Button
           onClick={goToCurrentMonth}
           variant="outline"

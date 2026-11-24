@@ -52,6 +52,7 @@ type InternalAlert struct {
 	AlertKey       string
 	Kind           string
 	Title          string
+	Subtitle       string
 	Body           string
 	Fields         []structs.NotificationField
 	Payload        map[string]string
@@ -82,12 +83,13 @@ func (a *AppDB) PostInternalAlert(ctx context.Context, alert InternalAlert) (int
 	var created bool
 	err = a.db.QueryRow(ctx, `
 		INSERT INTO internal_notifications
-			(organization_id, notification_set, alert_key, kind, title, body, fields, payload, urgent, topic)
+			(organization_id, notification_set, alert_key, kind, title, body, fields, payload, urgent, topic, subtitle)
 		VALUES
-			($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9, $10)
+			($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9, $10, $11)
 		ON CONFLICT (organization_id, alert_key) WHERE resolved_at IS NULL
 		DO UPDATE SET
 			title = EXCLUDED.title,
+			subtitle = EXCLUDED.subtitle,
 			body = EXCLUDED.body,
 			fields = EXCLUDED.fields,
 			payload = EXCLUDED.payload,
@@ -111,7 +113,7 @@ func (a *AppDB) PostInternalAlert(ctx context.Context, alert InternalAlert) (int
 	`,
 		alert.OrganizationId, alert.Set, alert.AlertKey, alert.Kind,
 		alert.Title, alert.Body, string(fields), string(payload), alert.Urgent,
-		alert.Topic,
+		alert.Topic, alert.Subtitle,
 	).Scan(&id, &created)
 	if err != nil {
 		return 0, false, fmt.Errorf("error posting internal alert %s: %w", alert.AlertKey, err)
@@ -395,7 +397,7 @@ func (a *AppDB) GetNotificationFeed(
 		SELECT
 			un.id, un.kind, un.title, un.body, un.data, un.created_at, un.seen_at,
 			n.id, n.notification_set, n.topic, n.alert_key, n.fields, n.payload, n.urgent, n.updated_at,
-			n.resolved_at, n.outcome
+			n.resolved_at, n.outcome, n.subtitle
 		FROM user_notifications un
 		LEFT JOIN internal_notifications n ON n.id = un.internal_notification_id
 		WHERE un.user_id = $1
@@ -451,7 +453,7 @@ func (a *AppDB) GetNotificationFeed(
 		SELECT
 			un.id, un.kind, un.title, un.body, un.data, un.created_at, un.seen_at,
 			n.id, n.notification_set, n.topic, n.alert_key, n.fields, n.payload, n.urgent, n.updated_at,
-			n.resolved_at, n.outcome
+			n.resolved_at, n.outcome, n.subtitle
 		FROM user_notifications un
 		LEFT JOIN internal_notifications n ON n.id = un.internal_notification_id
 		WHERE %s
@@ -490,7 +492,7 @@ func scanNotifications(rows pgx.Rows) ([]structs.UserNotification, error) {
 		var seenAt *time.Time
 
 		var internalId *int64
-		var set, topic, alertKey, outcome *string
+		var set, topic, alertKey, outcome, subtitle *string
 		var fields, payload []byte
 		var urgent *bool
 		var updatedAt, resolvedAt *time.Time
@@ -498,7 +500,7 @@ func scanNotifications(rows pgx.Rows) ([]structs.UserNotification, error) {
 		if err := rows.Scan(
 			&item.Id, &item.Kind, &item.Title, &item.Body, &data, &item.CreatedAt, &seenAt,
 			&internalId, &set, &topic, &alertKey, &fields, &payload, &urgent, &updatedAt,
-			&resolvedAt, &outcome,
+			&resolvedAt, &outcome, &subtitle,
 		); err != nil {
 			return nil, fmt.Errorf("error scanning notification: %w", err)
 		}
@@ -514,6 +516,7 @@ func scanNotifications(rows pgx.Rows) ([]structs.UserNotification, error) {
 				AlertKey: derefString(alertKey),
 				Set:      derefString(set),
 				Topic:    derefString(topic),
+				Subtitle: derefString(subtitle),
 				Urgent:   urgent != nil && *urgent,
 				Resolved: resolvedAt != nil,
 				Outcome:  derefString(outcome),
@@ -704,4 +707,38 @@ func (a *AppDB) AcknowledgeInternalAlert(
 	ctx context.Context, notificationId int64, userId string, outcome string,
 ) (bool, error) {
 	return a.ResolveInternalAlertById(ctx, notificationId, structs.ResolutionAcked, userId, outcome)
+}
+
+// InternalAlertRecipients is everybody an internal notification was delivered
+// to.
+func (a *AppDB) InternalAlertRecipients(ctx context.Context, notificationId int64) ([]string, error) {
+	rows, err := a.db.Query(ctx, `
+		SELECT user_id FROM user_notifications WHERE internal_notification_id = $1;
+	`, notificationId)
+	if err != nil {
+		return nil, fmt.Errorf("error loading the recipients of notification %d: %w", notificationId, err)
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var userId string
+		if err := rows.Scan(&userId); err != nil {
+			return nil, err
+		}
+		out = append(out, userId)
+	}
+	return out, rows.Err()
+}
+
+// LiveInternalAlertId is the id of the live alert under a key, or 0.
+func (a *AppDB) LiveInternalAlertId(ctx context.Context, organizationId int64, alertKey string) (int64, error) {
+	var id int64
+	err := a.db.QueryRow(ctx, `
+		SELECT id FROM internal_notifications
+		WHERE organization_id = $1 AND alert_key = $2 AND resolved_at IS NULL;
+	`, organizationId, alertKey).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, nil
+	}
+	return id, err
 }

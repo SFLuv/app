@@ -32,6 +32,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { InfoTip } from "@/components/ui/info-tip";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
@@ -2315,9 +2316,6 @@ export default function SettingsPage() {
         <h1 className="text-3xl font-bold text-black dark:text-white">
           Account Settings
         </h1>
-        <p className="text-gray-600 dark:text-gray-400 mt-1">
-          Manage your account preferences and settings
-        </p>
       </div>
 
       {/* {successMessage && (
@@ -2502,13 +2500,13 @@ export default function SettingsPage() {
           <Card className="mt-6">
             <CardHeader className="flex flex-row items-start justify-between gap-4">
               <div>
-                <CardTitle className="text-black dark:text-white">
+                <CardTitle className="flex items-center gap-2 text-black dark:text-white">
                   Verified Emails
+                  <InfoTip>
+                    Only verified emails can be used for role requests and wallet
+                    notification subscriptions.
+                  </InfoTip>
                 </CardTitle>
-                <CardDescription>
-                  Only verified emails can be used for role requests and wallet
-                  notification subscriptions.
-                </CardDescription>
               </div>
               <Button
                 type="button"
@@ -2609,7 +2607,7 @@ export default function SettingsPage() {
                   onSubmit={handleAddVerifiedEmail}
                   className="space-y-3 rounded border p-3"
                 >
-                  <div className="space-y-1">
+                  <div className="space-y-2">
                     <Label htmlFor="verified-email-input">Email</Label>
                     <Input
                       id="verified-email-input"
@@ -2672,10 +2670,6 @@ export default function SettingsPage() {
                 <CardTitle className="text-black dark:text-white">
                   Request Role Access
                 </CardTitle>
-                <CardDescription>
-                  Apply for affiliate, proposer, improver, issuer, or supervisor
-                  status
-                </CardDescription>
               </CardHeader>
               <CardContent>
                 <form onSubmit={handleRoleRequest} className="space-y-4">
@@ -2794,7 +2788,7 @@ export default function SettingsPage() {
 
                   {roleRequestType === "improver" && (
                     <>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <div className="space-y-2">
                           <Label
                             htmlFor="role-first-name"
@@ -2900,13 +2894,13 @@ export default function SettingsPage() {
 
           <Card className="mt-6">
             <CardHeader>
-              <CardTitle className="text-black dark:text-white">
+              <CardTitle className="flex items-center gap-2 text-black dark:text-white">
                 Primary Wallet
+                <InfoTip>
+                  This wallet is used as your default account anywhere a wallet is
+                  needed and you have not chosen a more specific one.
+                </InfoTip>
               </CardTitle>
-              <CardDescription>
-                This wallet is used as your default account anywhere a wallet is
-                needed and you have not chosen a more specific one.
-              </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="space-y-2">
@@ -3013,9 +3007,6 @@ export default function SettingsPage() {
               <CardTitle className="text-black dark:text-white">
                 Wallet Visibility
               </CardTitle>
-              <CardDescription>
-                Choose which wallets appear on your wallets page.
-              </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               {rewardsWalletsLoading ? (
@@ -3053,10 +3044,10 @@ export default function SettingsPage() {
                       <div className="flex items-center justify-between gap-3 sm:justify-end">
                         <div className="text-right">
                           <p className="text-sm font-medium text-black dark:text-white">
-                            Show on wallets page
-                          </p>
-                          <p className="text-xs text-gray-500 dark:text-gray-400">
-                            Hidden wallets stay usable elsewhere.
+                            <span className="inline-flex items-center gap-1.5">
+                              Show on wallets page
+                              <InfoTip>Hidden wallets stay usable elsewhere.</InfoTip>
+                            </span>
                           </p>
                         </div>
                         <Switch
@@ -3087,7 +3078,7 @@ export default function SettingsPage() {
 
           {affiliateStatus === "rejected" && (
             <Card className="mt-6 border-red-300 dark:border-red-700">
-              <CardHeader className="bg-red-50 dark:bg-red-900/20 rounded-t-lg">
+              <CardHeader className="bg-red-50 dark:bg-red-900/20 rounded-t-lg pb-card">
                 <CardTitle className="text-black dark:text-white flex items-center">
                   <XCircle className="h-5 w-5 text-red-500 mr-2" />
                   Affiliate Request Not Approved
@@ -3104,7 +3095,7 @@ export default function SettingsPage() {
 
           {proposerStatus === "rejected" && (
             <Card className="mt-6 border-red-300 dark:border-red-700">
-              <CardHeader className="bg-red-50 dark:bg-red-900/20 rounded-t-lg">
+              <CardHeader className="bg-red-50 dark:bg-red-900/20 rounded-t-lg pb-card">
                 <CardTitle className="text-black dark:text-white flex items-center">
                   <XCircle className="h-5 w-5 text-red-500 mr-2" />
                   Proposer Request Not Approved
@@ -3121,7 +3112,7 @@ export default function SettingsPage() {
 
           {improverStatus === "rejected" && (
             <Card className="mt-6 border-red-300 dark:border-red-700">
-              <CardHeader className="bg-red-50 dark:bg-red-900/20 rounded-t-lg">
+              <CardHeader className="bg-red-50 dark:bg-red-900/20 rounded-t-lg pb-card">
                 <CardTitle className="text-black dark:text-white flex items-center">
                   <XCircle className="h-5 w-5 text-red-500 mr-2" />
                   Improver Request Not Approved
@@ -3138,7 +3129,7 @@ export default function SettingsPage() {
 
           {issuerStatus === "rejected" && (
             <Card className="mt-6 border-red-300 dark:border-red-700">
-              <CardHeader className="bg-red-50 dark:bg-red-900/20 rounded-t-lg">
+              <CardHeader className="bg-red-50 dark:bg-red-900/20 rounded-t-lg pb-card">
                 <CardTitle className="text-black dark:text-white flex items-center">
                   <XCircle className="h-5 w-5 text-red-500 mr-2" />
                   Issuer Request Not Approved
@@ -3155,7 +3146,7 @@ export default function SettingsPage() {
 
           {supervisorStatus === "rejected" && (
             <Card className="mt-6 border-red-300 dark:border-red-700">
-              <CardHeader className="bg-red-50 dark:bg-red-900/20 rounded-t-lg">
+              <CardHeader className="bg-red-50 dark:bg-red-900/20 rounded-t-lg pb-card">
                 <CardTitle className="text-black dark:text-white flex items-center">
                   <XCircle className="h-5 w-5 text-red-500 mr-2" />
                   Supervisor Request Not Approved
@@ -3199,10 +3190,6 @@ export default function SettingsPage() {
               <CardTitle className="text-black dark:text-white">
                 Link Socials
               </CardTitle>
-              <CardDescription>
-                Manage the Google and Apple sign-in methods attached to this
-                account.
-              </CardDescription>
             </CardHeader>
             <CardContent className="space-y-5">
               <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
@@ -3339,15 +3326,15 @@ export default function SettingsPage() {
 
           <Card className="mt-6 border-red-200/80 bg-red-50/70 dark:border-red-500/30 dark:bg-red-500/10">
             <CardHeader>
-              <CardTitle className="text-black dark:text-white">
+              <CardTitle className="flex items-center gap-2 text-black dark:text-white">
                 Delete Account
+                <InfoTip>
+                  Delete your account and log out. Your account will be
+                  recoverable for the next 30 days, but any SFLuv in your
+                  accessible wallets will be transferred out of your account
+                  before the deletion request is submitted.
+                </InfoTip>
               </CardTitle>
-              <CardDescription>
-                Delete your account and log out. Your account will be
-                recoverable for the next 30 days, but any SFLuv in your
-                accessible wallets will be transferred out of your account
-                before the deletion request is submitted.
-              </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               {deleteAccountError ? (
@@ -3380,14 +3367,14 @@ export default function SettingsPage() {
           <TabsContent value="merchant" className="space-y-6">
             <Card>
               <CardHeader>
-                <CardTitle className="text-black dark:text-white">
+                <CardTitle className="flex items-center gap-2 text-black dark:text-white">
                   Merchant Mode PIN
+                  <InfoTip>
+                    {merchantModePasscodeSet
+                      ? "Resetting the 6 digit exit PIN requires the current PIN."
+                      : "Create a 6 digit exit PIN before enabling merchant mode on store devices."}
+                  </InfoTip>
                 </CardTitle>
-                <CardDescription>
-                  {merchantModePasscodeSet
-                    ? "Resetting the 6 digit exit PIN requires the current PIN."
-                    : "Create a 6 digit exit PIN before enabling merchant mode on store devices."}
-                </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
                 {merchantModeStatusLoading ? (
@@ -3633,7 +3620,7 @@ export default function SettingsPage() {
                         </CollapsibleTrigger>
 
                         <CollapsibleContent>
-                          <CardContent className="space-y-6 pt-0">
+                          <CardContent className="space-y-6">
                             <div className="space-y-4">
                               {false ? (
                               <div className="space-y-4 rounded-xl border bg-background/70 p-4">
@@ -3873,12 +3860,12 @@ export default function SettingsPage() {
                                   depends on that editor being back. */}
                               <div className="space-y-4 rounded-xl border bg-background/70 p-4">
                                 <div className="space-y-1">
-                                  <h3 className="text-sm font-semibold text-black dark:text-white">
+                                  <h3 className="flex items-center gap-2 text-sm font-semibold text-black dark:text-white">
                                     Listing images
+                                    <InfoTip>
+                                      How this location appears on the merchant map and on its listing.
+                                    </InfoTip>
                                   </h3>
-                                  <p className="text-xs text-muted-foreground">
-                                    How this location appears on the merchant map and on its listing.
-                                  </p>
                                 </div>
 
                                 <div className="space-y-2 rounded-lg border p-3">
@@ -3929,14 +3916,14 @@ export default function SettingsPage() {
                                 <div className="rounded-xl border bg-background/70 p-4">
                                   <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                                     <div className="space-y-1">
-                                      <h3 className="text-sm font-semibold text-black dark:text-white">
+                                      <h3 className="flex items-center gap-2 text-sm font-semibold text-black dark:text-white">
                                         Merchant mode devices
+                                        <InfoTip>
+                                          Control whether registered store devices are locked to
+                                          receive-only merchant mode. Turning a device on requires
+                                          a Merchant Mode PIN to be saved first.
+                                        </InfoTip>
                                       </h3>
-                                      <p className="text-xs text-muted-foreground">
-                                        Control whether registered store devices are locked to
-                                        receive-only merchant mode. Turning a device on requires
-                                        a Merchant Mode PIN to be saved first.
-                                      </p>
                                     </div>
                                     <Button
                                       type="button"
@@ -3971,9 +3958,13 @@ export default function SettingsPage() {
                                       </div>
                                     ) : locationMerchantModeDevices.length === 0 ? (
                                       <p className="rounded-lg border border-dashed px-3 py-4 text-sm text-muted-foreground">
-                                        No registered devices for this location yet. Open the
-                                        mobile app on a store device and enable merchant mode once
-                                        to register it here.
+                                        <span className="inline-flex items-center gap-1.5">
+                                          No registered devices for this location yet.
+                                          <InfoTip>
+                                            Open the mobile app on a store device and enable
+                                            merchant mode once to register it here.
+                                          </InfoTip>
+                                        </span>
                                       </p>
                                     ) : (
                                       locationMerchantModeDevices.map((device) => {
@@ -4077,9 +4068,6 @@ export default function SettingsPage() {
                                     <h3 className="text-sm font-semibold text-black dark:text-white">
                                       Payment wallets
                                     </h3>
-                                    <p className="text-xs text-muted-foreground">
-                                      Tap a wallet to add it.
-                                    </p>
                                   </div>
 
                                   <div className="mt-4 space-y-3">
@@ -4170,13 +4158,13 @@ export default function SettingsPage() {
 
                                   {walletDraft.replacingRole === "payment" && (
                                     <div className="mt-4 rounded-lg border border-border bg-secondary/40 p-3">
-                                      <p className="text-sm font-medium text-black dark:text-white">
+                                      <p className="flex items-center gap-2 text-sm font-medium text-black dark:text-white">
                                         Choose a new payment wallet
-                                      </p>
-                                      <p className="mt-1 text-xs text-muted-foreground">
-                                        This location keeps taking payments the
-                                        whole time — the old wallet is swapped
-                                        out only once the new one is attached.
+                                        <InfoTip>
+                                          This location keeps taking payments the
+                                          whole time — the old wallet is swapped
+                                          out only once the new one is attached.
+                                        </InfoTip>
                                       </p>
 
                                       {walletDraft.replaceLoading ? (
@@ -4356,12 +4344,10 @@ export default function SettingsPage() {
 
                                 <div className="rounded-xl border bg-background/70 p-4">
                                   <div className="space-y-1">
-                                    <h3 className="text-sm font-semibold text-black dark:text-white">
+                                    <h3 className="flex items-center gap-2 text-sm font-semibold text-black dark:text-white">
                                       Tip wallet
+                                      <InfoTip>Must be different from every payment wallet.</InfoTip>
                                     </h3>
-                                    <p className="text-xs text-muted-foreground">
-                                      Must be different from every payment wallet.
-                                    </p>
                                   </div>
 
                                   <div className="mt-4 space-y-2">
@@ -4476,12 +4462,12 @@ export default function SettingsPage() {
             {reviewMerchantLocations.length > 0 && (
               <div className="space-y-3">
                 <div className="space-y-1">
-                  <h2 className="text-lg font-semibold text-black dark:text-white">
+                  <h2 className="flex items-center gap-2 text-lg font-semibold text-black dark:text-white">
                     Location requests
+                    <InfoTip>
+                      Pending and rejected locations stay here until they are approved.
+                    </InfoTip>
                   </h2>
-                  <p className="text-sm text-muted-foreground">
-                    Pending and rejected locations stay here until they are approved.
-                  </p>
                 </div>
 
                 {reviewMerchantLocations.map((loc) => {
@@ -4492,8 +4478,8 @@ export default function SettingsPage() {
                       : "border-yellow-300 dark:border-yellow-700";
                   const headerClass =
                     applicationStatus === "rejected"
-                      ? "bg-red-50 dark:bg-red-900/20 rounded-t-lg"
-                      : "bg-yellow-50 dark:bg-yellow-900/20 rounded-t-lg";
+                      ? "bg-red-50 dark:bg-red-900/20 rounded-t-lg pb-card"
+                      : "bg-yellow-50 dark:bg-yellow-900/20 rounded-t-lg pb-card";
                   const Icon = applicationStatus === "rejected" ? XCircle : Clock;
                   const iconClass =
                     applicationStatus === "rejected"
@@ -4544,7 +4530,7 @@ export default function SettingsPage() {
               }
             >
               <CardHeader
-                className={`rounded-t-lg ${improverStatus === "approved" ? "bg-green-50 dark:bg-green-900/20" : "bg-yellow-50 dark:bg-yellow-900/20"}`}
+                className={`rounded-t-lg pb-card ${improverStatus === "approved" ? "bg-green-50 dark:bg-green-900/20" : "bg-yellow-50 dark:bg-yellow-900/20"}`}
               >
                 <CardTitle className="text-black dark:text-white flex items-center">
                   {improverStatus === "approved" ? (
@@ -4571,18 +4557,18 @@ export default function SettingsPage() {
                       workflow steps.
                     </p>
                     <div className="space-y-3 rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-900/30">
-                      <div className="space-y-1">
+                      <div className="flex items-center gap-1.5">
                         <Label
                           htmlFor="improver-primary-rewards-account"
                           className="text-black dark:text-white"
                         >
                           Primary Rewards Account
                         </Label>
-                        <p className="text-xs text-gray-500 dark:text-gray-400">
+                        <InfoTip>
                           Workflow rewards are paid to this account. Your
                           primary wallet is used by default until you choose a
                           different rewards account here.
-                        </p>
+                        </InfoTip>
                       </div>
                       <Select
                         value={
@@ -4870,12 +4856,16 @@ export default function SettingsPage() {
           setMerchantModeForgotPinOpen(open);
         }}
       >
-        <DialogContent>
+        <DialogContent aria-describedby={undefined}>
           <DialogHeader>
-            <DialogTitle>Forgot your PIN?</DialogTitle>
-            <DialogDescription>
-              Click here to inform Tech Support, and we will be back to you shortly.
-            </DialogDescription>
+            <DialogTitle>
+              <span className="inline-flex items-center gap-1.5">
+                Forgot your PIN?
+                <InfoTip>
+                  Click here to inform Tech Support, and we will be back to you shortly.
+                </InfoTip>
+              </span>
+            </DialogTitle>
           </DialogHeader>
 
           {merchantModeForgotPinError ? (

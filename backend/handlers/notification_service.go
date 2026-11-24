@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -38,6 +39,12 @@ type NotificationService struct {
 	// push: the chat plumbing lives on AppService.
 	chat func(ctx context.Context, conversationId int64, line string) error
 
+	// announce sends a new notification over the socket to recipients with
+	// the app open; announceResolved tells recipients one was handled. Both
+	// live on AppService, with the socket.
+	announce         func(userIds []string, title, body string, data map[string]string)
+	announceResolved func(ctx context.Context, id int64, key string, userIds []string)
+
 	// houseMu guards the cached house organization id. The lookup is a query
 	// per alert otherwise, and alerts are posted from a once-a-minute sweep.
 	houseMu sync.Mutex
@@ -47,6 +54,19 @@ type NotificationService struct {
 // NewNotificationService builds the alert layer.
 func NewNotificationService(appDb *db.AppDB, log *logger.LogCloser) *NotificationService {
 	return &NotificationService{db: appDb, logger: log}
+}
+
+// SetAnnouncer wires the socket: new notifications to open apps, and handled
+// ones cleared from every app and phone they reached.
+func (n *NotificationService) SetAnnouncer(
+	announce func(userIds []string, title, body string, data map[string]string),
+	announceResolved func(ctx context.Context, id int64, key string, userIds []string),
+) {
+	if n == nil {
+		return
+	}
+	n.announce = announce
+	n.announceResolved = announceResolved
 }
 
 // SetPusher wires device delivery. Set after construction because the pusher
@@ -104,9 +124,14 @@ type Alert struct {
 	// first is live are the same alert, however far apart.
 	Key string
 	// Kind selects the action buttons.
-	Kind  string
+	Kind string
+	// Title is the notification's headline, on its detail page and in email.
 	Title string
-	Body  string
+	// Subtitle is who or what it is about in a few words: the requester's
+	// email, a name, an event. The app's list shows the topic and this line
+	// only; everything else waits for a tap. Empty uses Title.
+	Subtitle string
+	Body     string
 	// Fields are label/value detail rows.
 	Fields []structs.NotificationField
 	// Payload is what an action needs to do its work.
@@ -124,6 +149,9 @@ type Alert struct {
 	// ChatLine replaces the line a team chat is sent, for a caller that knows
 	// better than the generic one what is safe to show to everybody in a chat.
 	ChatLine string
+	// OnlyTeamId sends it to one team, through its own rules, instead of to
+	// every team the topic is routed to. Team test sends use it.
+	OnlyTeamId int64
 }
 
 // Post puts a notification in the hub and delivers it to the teams its topic
@@ -164,6 +192,7 @@ func (n *NotificationService) Post(ctx context.Context, alert Alert) error {
 		AlertKey:       alert.Key,
 		Kind:           alert.Kind,
 		Title:          alert.Title,
+		Subtitle:       subtitleOf(alert),
 		Body:           alert.Body,
 		Fields:         alert.Fields,
 		Payload:        alert.Payload,
@@ -173,7 +202,12 @@ func (n *NotificationService) Post(ctx context.Context, alert Alert) error {
 		return err
 	}
 
-	plan, err := n.db.NotificationDeliveryPlan(ctx, orgId, topic.Id)
+	var plan *db.NotificationDeliveryPlan
+	if alert.OnlyTeamId != 0 {
+		plan, err = n.db.NotificationTeamPlan(ctx, orgId, alert.OnlyTeamId, topic.Id)
+	} else {
+		plan, err = n.db.NotificationDeliveryPlan(ctx, orgId, topic.Id)
+	}
 	if err != nil {
 		// Stored, so it is in the hub and in the admin panel's list; nobody
 		// was told. Recorded as such so the list says so.
@@ -191,18 +225,25 @@ func (n *NotificationService) Post(ctx context.Context, alert Alert) error {
 	}
 
 	pushed := 0
+	data := map[string]string{
+		"type":             "internal_" + alert.Kind,
+		"notification_set": topic.Set,
+		"topic":            topic.Id,
+		"alert_key":        alert.Key,
+		"internal_id":      strconv.FormatInt(id, 10),
+	}
+	pushTitle, pushBody := hubPushText(topic, alert)
+	// Everybody it just reached who has the app open sees it now, as an in-app
+	// banner, and their list refreshes; the push below still goes.
+	if n.announce != nil && len(recipients) > 0 {
+		n.announce(recipients, pushTitle, pushBody, data)
+	}
 	if n.push != nil && len(recipients) > 0 {
-		data := map[string]string{
-			"type":             "internal_" + alert.Kind,
-			"notification_set": topic.Set,
-			"topic":            topic.Id,
-			"alert_key":        alert.Key,
-		}
 		for _, userId := range recipients {
 			if !plan.Push[userId] {
 				continue
 			}
-			n.push(ctx, userId, alert.Title, alert.Body, data)
+			n.push(ctx, userId, pushTitle, pushBody, data)
 			pushed++
 		}
 	}
@@ -264,7 +305,7 @@ func (n *NotificationService) deliverOutside(
 		} else {
 			html := hubEmailHTML(topic, alert, plan.Teams)
 			for _, address := range plan.Emails {
-				if err := sender.SendEmailWithReplyTo(address, "", alert.Title, html,
+				if err := sender.SendEmailWithReplyTo(address, "", hubEmailSubject(topic, alert), html,
 					utils.NotificationFromEmail(), "SFLuv notifications", alert.ReplyTo); err != nil {
 					delivery.Failures = append(delivery.Failures, "email to "+address+": "+err.Error())
 					continue
@@ -275,10 +316,7 @@ func (n *NotificationService) deliverOutside(
 	}
 
 	if len(plan.Chats) > 0 {
-		line := alert.ChatLine
-		if strings.TrimSpace(line) == "" {
-			line = hubChatLine(alert)
-		}
+		line := hubChatMessage(topic, alert)
 		for _, chat := range plan.Chats {
 			if n.chat == nil {
 				delivery.Failures = append(delivery.Failures, "chat: chat delivery is not wired")
@@ -304,29 +342,75 @@ func (n *NotificationService) deliverOutside(
 	}
 }
 
-// hubEmailHTML is the email a team address or member receives.
+// pushPreviewRunes is how much of the message a push carries after the
+// subtitle: the gist, not the whole thing, which opens with a tap.
+const pushPreviewRunes = 160
+
+// subtitleOf is the line under the topic in the app's list.
+func subtitleOf(alert Alert) string {
+	if subtitle := oneLineText(alert.Subtitle); subtitle != "" {
+		return subtitle
+	}
+	return oneLineText(alert.Title)
+}
+
+// hubPushText is what a phone shows: the topic as the title, then who or what
+// it is about, the headline when it says more than that, and the start of the
+// message, each on its own line.
+func hubPushText(topic structs.NotificationTopicDefinition, alert Alert) (string, string) {
+	lines := []string{}
+	subtitle := subtitleOf(alert)
+	if subtitle != "" {
+		lines = append(lines, subtitle)
+	}
+	if title := oneLineText(alert.Title); title != "" && title != subtitle {
+		lines = append(lines, title)
+	}
+	if body := oneLineText(alert.Body); body != "" {
+		lines = append(lines, truncateRunes(body, pushPreviewRunes))
+	}
+	return topic.Label, strings.Join(lines, "\n")
+}
+
+// hubEmailSubject leads with the topic, so an inbox sorts by it, then who or
+// what it is about.
+func hubEmailSubject(topic structs.NotificationTopicDefinition, alert Alert) string {
+	if subtitle := subtitleOf(alert); subtitle != "" {
+		return topic.Label + ": " + subtitle
+	}
+	return topic.Label
+}
+
+// hubEmailHTML is a notification as an email: the headline, the details as a
+// table, then the message itself with its line breaks kept.
 func hubEmailHTML(topic structs.NotificationTopicDefinition, alert Alert, teams []structs.NotificationDeliveryTeam) string {
 	var content strings.Builder
-	if body := strings.TrimSpace(alert.Body); body != "" {
-		content.WriteString(`<p style="margin:0 0 18px; font-size:14px; line-height:1.55; color:#111827; white-space:pre-wrap;">`)
-		content.WriteString(utils.EscapeEmailHTML(body))
+	if subtitle := subtitleOf(alert); subtitle != "" && subtitle != oneLineText(alert.Title) {
+		content.WriteString(`<p style="margin:0 0 16px; font-size:15px; line-height:1.5; color:#374151;">`)
+		content.WriteString(utils.EscapeEmailHTML(subtitle))
 		content.WriteString(`</p>`)
 	}
 	if len(alert.Fields) > 0 {
-		content.WriteString(`<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">`)
+		content.WriteString(`<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse; margin:0 0 20px;">`)
 		for _, field := range alert.Fields {
 			if strings.TrimSpace(field.Value) == "" {
 				continue
 			}
 			content.WriteString(fmt.Sprintf(`<tr>
-    <td style="padding:10px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280; width:150px; vertical-align:top;">%s</td>
+    <td style="padding:10px 12px 10px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280; width:150px; vertical-align:top;">%s</td>
     <td style="padding:10px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827; white-space:pre-wrap; word-break:break-word;">%s</td>
   </tr>`, utils.EscapeEmailHTML(field.Label), utils.EscapeEmailHTML(field.Value)))
 		}
 		content.WriteString(`</table>`)
 	}
+	if body := strings.TrimSpace(alert.Body); body != "" {
+		content.WriteString(`<p style="margin:0 0 8px; font-size:12px; font-weight:600; letter-spacing:0.04em; text-transform:uppercase; color:#6b7280;">Message</p>`)
+		content.WriteString(`<div style="margin:0 0 20px; padding:16px; border-radius:12px; background:#f9fafb; border:1px solid #e5e7eb; font-size:14px; line-height:1.6; color:#111827; white-space:pre-wrap; word-break:break-word;">`)
+		content.WriteString(utils.EscapeEmailHTML(body))
+		content.WriteString(`</div>`)
+	}
 	if alert.ReplyTo != "" {
-		content.WriteString(`<p style="margin:18px 0 0; font-size:13px; color:#374151;">Reply to this email to answer them.</p>`)
+		content.WriteString(`<p style="margin:0; font-size:13px; color:#374151;">Reply to this email to answer them.</p>`)
 	}
 
 	names := make([]string, 0, len(teams))
@@ -335,25 +419,37 @@ func hubEmailHTML(topic structs.NotificationTopicDefinition, alert Alert, teams 
 	}
 	footer := "SFLuv notification hub"
 	if len(names) > 0 {
-		footer = "Sent to " + strings.Join(names, ", ") + " · change who gets this on the Organization page"
+		footer = "Sent to " + strings.Join(names, ", ") + " · change where this goes in the Notification Hub"
 	}
 	return utils.BuildStyledEmailWithFooter(alert.Title, topic.Label, content.String(), footer)
 }
 
-// hubChatLine is the generic line a team chat gets: the title, the details on
-// one line, and the start of the body.
-func hubChatLine(alert Alert) string {
-	parts := []string{strings.TrimSpace(alert.Title)}
+// hubChatMessage is what a team chat gets, one thing per line: the topic, then
+// either the caller's own chat text (for what is safe to show everybody in a
+// chat) or the headline, each detail, and the start of the message.
+func hubChatMessage(topic structs.NotificationTopicDefinition, alert Alert) string {
+	var out strings.Builder
+	out.WriteString(topic.Label)
+	if line := strings.TrimSpace(alert.ChatLine); line != "" {
+		out.WriteString("\n")
+		out.WriteString(line)
+		return out.String()
+	}
+	if title := oneLineText(alert.Title); title != "" {
+		out.WriteString("\n")
+		out.WriteString(title)
+	}
 	for _, field := range alert.Fields {
 		if value := oneLineText(field.Value); value != "" {
-			parts = append(parts, field.Label+": "+value)
+			out.WriteString("\n")
+			out.WriteString(field.Label + ": " + value)
 		}
 	}
-	line := strings.Join(parts, " · ")
-	if body := oneLineText(alert.Body); body != "" {
-		line += "\n" + truncateRunes(body, supportChatPreviewRunes)
+	if body := strings.TrimSpace(alert.Body); body != "" {
+		out.WriteString("\n\n")
+		out.WriteString(truncateRunes(body, supportChatPreviewRunes))
 	}
-	return line
+	return out.String()
 }
 
 // Resolve retracts an alert by key, for a condition that cleared on its own.
@@ -368,8 +464,31 @@ func (n *NotificationService) Resolve(ctx context.Context, key string, outcome s
 		}
 		return err
 	}
-	_, err = n.db.ResolveInternalAlert(ctx, orgId, key, structs.ResolutionCleared, "", outcome)
-	return err
+	id, err := n.db.LiveInternalAlertId(ctx, orgId, key)
+	if err != nil || id == 0 {
+		return err
+	}
+	resolved, err := n.db.ResolveInternalAlert(ctx, orgId, key, structs.ResolutionCleared, "", outcome)
+	if err != nil {
+		return err
+	}
+	if resolved {
+		n.resolved(ctx, id, key)
+	}
+	return nil
+}
+
+// resolved tells everybody a notification went to that it is done.
+func (n *NotificationService) resolved(ctx context.Context, id int64, key string) {
+	if n.announceResolved == nil {
+		return
+	}
+	recipients, err := n.db.InternalAlertRecipients(ctx, id)
+	if err != nil {
+		n.logf("notifications: could not load who %s went to: %s", key, err)
+		return
+	}
+	n.announceResolved(ctx, id, key, recipients)
 }
 
 // LiveKeys lists the unresolved alert keys under a prefix, for a sweep that

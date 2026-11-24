@@ -5,7 +5,8 @@ import { ArrowDown, ArrowUp, ExternalLink, ImageIcon, Loader2, Pencil, Plus, Tra
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { InfoTip } from "@/components/ui/info-tip"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
@@ -156,12 +157,12 @@ function PartnerRow({
       {expanded && (
         <div className="space-y-3 border-t bg-muted/20 p-4">
           <div className="grid gap-3 sm:grid-cols-2">
-            <div className="space-y-1">
+            <div className="space-y-2">
               <Label htmlFor={`partner-name-${partner.id}`}>Name</Label>
               <Input id={`partner-name-${partner.id}`} value={name}
                 onChange={(event) => setName(event.target.value)} placeholder="Partner name" />
             </div>
-            <div className="space-y-1">
+            <div className="space-y-2">
               <Label htmlFor={`partner-link-${partner.id}`}>Link</Label>
               <Input id={`partner-link-${partner.id}`} value={linkUrl}
                 onChange={(event) => setLinkUrl(event.target.value)}
@@ -420,16 +421,18 @@ export function PartnersPanel() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Partner Carousel</CardTitle>
-        <CardDescription>
-          Organizations shown in the scrolling partner banner on sfluv.org. Order here is the order visitors
-          see. Partners without a logo stay hidden until one is uploaded.
-        </CardDescription>
+        <CardTitle className="flex items-center gap-2">
+          Partner Carousel
+          <InfoTip>
+            Organizations shown in the scrolling partner banner on sfluv.org. Order here is the order visitors
+            see. Partners without a logo stay hidden until one is uploaded.
+          </InfoTip>
+        </CardTitle>
       </CardHeader>
-      <CardContent className="space-y-6">
+      <CardContent className="space-y-4">
         <div className="rounded-lg border border-dashed p-4">
           <div className="grid gap-3 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
-            <div className="space-y-1">
+            <div className="space-y-2">
               <Label htmlFor="new-partner-name">Name</Label>
               <Input
                 id="new-partner-name"
@@ -438,7 +441,7 @@ export function PartnersPanel() {
                 placeholder="Citizen Wallet"
               />
             </div>
-            <div className="space-y-1">
+            <div className="space-y-2">
               <Label htmlFor="new-partner-link">Link</Label>
               <Input
                 id="new-partner-link"
@@ -464,8 +467,9 @@ export function PartnersPanel() {
         {error !== "" && <p className="text-sm text-destructive">{error}</p>}
 
         {!initialLoading && error === "" && partners.length === 0 && (
-          <p className="text-sm text-muted-foreground">
-            No partners yet. Add one above, then upload its logo.
+          <p className="flex items-center gap-2 text-sm text-muted-foreground">
+            No partners yet.
+            <InfoTip>Add one above, then upload its logo.</InfoTip>
           </p>
         )}
 

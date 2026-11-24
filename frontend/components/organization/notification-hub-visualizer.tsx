@@ -7,15 +7,17 @@ import { Loader2, RefreshCw } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
-import type {
-  NotificationHubMember,
-  NotificationHubView,
-  NotificationTeam,
-  NotificationTopicDefinition,
-  NotificationTouchpointDefinition,
+import {
+  DEFAULT_TEAM_DESTINATIONS,
+  TEAM_RULE_DEFAULT,
+  type NotificationHubMember,
+  type NotificationHubView,
+  type NotificationTeam,
+  type NotificationTopicDefinition,
+  type NotificationTouchpointDefinition,
 } from "@/types/notifications"
 
-import type { Reach } from "./notification-hub"
+import type { Reach } from "./notification-hub-shared"
 
 /**
  * The hub, drawn live.
@@ -312,12 +314,18 @@ export function NotificationHubVisualizer({
     if (reach?.kind === "catch-all") return `${names.join(", ")}, through the catch-all.${issuers}`
     return `Nobody. ${reach?.kind === "nobody" ? reach.reason : ""}${issuers}`
   }
+  // Every way the team's rules can tell somebody, across its topics. A team
+  // with no default rule still buzzes everyone for topics without their own.
   const channelsOf = (team: NotificationTeam) => {
+    const rules = Object.values(team.rules ?? {})
+    if (!team.rules?.[TEAM_RULE_DEFAULT]) rules.push(DEFAULT_TEAM_DESTINATIONS)
     const out = ["in the app"]
-    if (team.push_members) out.push("push")
-    if (team.email_members) out.push("email to members")
-    if (team.email_address) out.push(team.email_address)
-    if (team.chat_conversation_id) out.push(team.chat_name ? `chat “${team.chat_name}”` : `chat ${team.chat_conversation_id}`)
+    if (rules.some((rule) => rule.everyone?.push || rule.members.some((member) => member.push))) out.push("push")
+    if (rules.some((rule) => rule.everyone?.email || rule.members.some((member) => member.email))) out.push("email to members")
+    if (team.email_address && rules.some((rule) => rule.email_address)) out.push(team.email_address)
+    for (const chat of team.chats ?? []) {
+      if (rules.some((rule) => rule.chats.includes(chat.id))) out.push(`chat “${chat.title || chat.id}”`)
+    }
     return out
   }
   const activeMembers = (team: NotificationTeam) => team.member_ids.filter((id) => orgMemberIds.has(id))

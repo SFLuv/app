@@ -5,6 +5,7 @@ import { useApp } from "@/context/AppProvider"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { InfoTip } from "@/components/ui/info-tip"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { WorkflowDetailsModal } from "@/components/workflows/workflow-details-modal"
 import { formatStatusLabel } from "@/lib/status-labels"
@@ -642,9 +643,9 @@ export default function VoterPage() {
 
   if (!canVote) {
     return (
-      <div className="container mx-auto p-4 space-y-4">
+      <div className="container mx-auto space-y-4">
         <Card>
-          <CardHeader>
+          <CardHeader className="pb-card">
             <CardTitle>Voter Access Required</CardTitle>
             <CardDescription>
               Your account is not approved for voter access yet. Admins can grant this in the admin panel.
@@ -656,10 +657,9 @@ export default function VoterPage() {
   }
 
   return (
-    <div className="container mx-auto p-4 space-y-6">
+    <div className="container mx-auto space-y-6">
       <div>
         <h1 className="text-3xl font-bold">Voter Panel</h1>
-        <p className="text-muted-foreground">Review workflow proposals, workflow edit proposals, and deletion proposals.</p>
       </div>
 
       {error && (
@@ -1045,10 +1045,10 @@ export default function VoterPage() {
         <TabsContent value="active-workflows">
           <Card>
             <CardHeader>
-              <CardTitle>Active Workflows</CardTitle>
-              <CardDescription>
-                Active workflows that can be targeted by voter deletion proposals.
-              </CardDescription>
+              <CardTitle className="flex items-center gap-2">
+                Active Workflows
+                <InfoTip>Active workflows that can be targeted by voter deletion proposals.</InfoTip>
+              </CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
               {activeWorkflows.length === 0 ? (
@@ -1060,7 +1060,7 @@ export default function VoterPage() {
                     className="cursor-pointer transition-colors hover:bg-muted/30"
                     onClick={() => openWorkflowDetails(workflow.id, undefined, "active-workflows")}
                   >
-                    <CardContent className="pt-4 space-y-2">
+                    <CardContent className="p-4 space-y-2">
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <h4 className="font-semibold">{workflow.title}</h4>
                         <Badge>{formatWorkflowDisplayStatus(workflow)}</Badge>

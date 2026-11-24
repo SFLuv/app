@@ -259,7 +259,7 @@ export function EventModal({
         deleteEventError={deleteEventError}
       />
       <DialogContent className="w-[95vw] max-w-md mx-auto max-h-[90vh] rounded-lg overflow-y-auto">
-        <DialogHeader className="space-y-2 pb-2">
+        <DialogHeader>
           <DialogTitle className="text-lg sm:text-xl">{event.title}</DialogTitle>
           <DialogDescription className="text-sm">
             {event.description}

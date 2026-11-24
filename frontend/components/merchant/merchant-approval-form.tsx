@@ -367,7 +367,7 @@ function SelectWithOther({
       <FieldError message={fieldErrors[field]} />
       <CarriedOverAnswer show={carriedOver} />
       {otherField && values[field] === OTHER && (
-        <div className="space-y-2 mt-2">
+        <div className="space-y-2">
           <Label htmlFor={`${id}-other`} className="text-black dark:text-white">
             {otherLabel}
           </Label>
@@ -643,9 +643,7 @@ export function MerchantApprovalForm({
 
   return (
     <Card>
-      {/* pb trimmed: with the description gone the header's own padding plus
-          the content's left a large empty band under the title. */}
-      <CardHeader className="pb-2">
+      <CardHeader>
         <CardTitle className="text-black dark:text-white">
           {isEditing ? "Edit Your Merchant Application" : "Merchant Application"}
         </CardTitle>
@@ -776,8 +774,8 @@ export function MerchantApprovalForm({
             </div>
 
             {/* Business Contact Information */}
-            <div>
-              <h3 className="text-lg font-medium text-black dark:text-white mb-4">
+            <div className="pt-4">
+              <h3 className="text-lg font-medium text-black dark:text-white mb-3">
                 Business Contact Information (Publicly Available to Customers)
               </h3>
               <div className="grid gap-4 md:grid-cols-2">
@@ -813,8 +811,8 @@ export function MerchantApprovalForm({
             </div>
 
             {/* Primary Contact Information */}
-            <div>
-              <h3 className="text-lg font-medium text-black dark:text-white mb-4">
+            <div className="pt-4">
+              <h3 className="text-lg font-medium text-black dark:text-white mb-3">
                 Primary Administrative Contact for Business (Only Visible to SFLuv Admin Team)
               </h3>
               <div className="grid gap-4 md:grid-cols-2">

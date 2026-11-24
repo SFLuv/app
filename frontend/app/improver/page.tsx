@@ -5,6 +5,7 @@ import { useApp } from "@/context/AppProvider"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { InfoTip } from "@/components/ui/info-tip"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -558,7 +559,7 @@ function LocalPhotoThumbnail({
 function ImproverTabLoadingCard({ label }: { label: string }) {
   return (
     <Card>
-      <CardContent className="flex min-h-[260px] items-center justify-center">
+      <CardContent className="flex min-h-[260px] items-center justify-center pt-card">
         <div className="flex items-center gap-3 text-sm text-muted-foreground">
           <Loader2 className="h-4 w-4 animate-spin" />
           <span>{label}</span>
@@ -2787,7 +2788,7 @@ export default function ImproverPage() {
     const canShiftForward = hasSeriesNavigation && workflowIndex < detailSeriesContext.workflowIds.length - 1
 
     return (
-      <div className="space-y-2 rounded-md border bg-secondary/30 p-2.5 sm:p-3">
+      <div className="space-y-2 rounded-md border bg-secondary/30 p-3">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <p className="text-xs text-muted-foreground">
             Series workflow {workflowIndex + 1} of {detailSeriesContext.workflowIds.length}
@@ -2831,7 +2832,7 @@ export default function ImproverPage() {
 
     return (
       <Card className="overflow-hidden border-[#eb6c6c]/25 bg-[#fff4f1] shadow-sm dark:border-[#eb6c6c]/30 dark:bg-[#3a1d1d]/55">
-        <CardContent className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
+        <CardContent className="flex flex-col gap-4 pt-card sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-start gap-4">
             <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-emerald-600 text-white shadow-sm dark:bg-emerald-500">
               <CheckCircle2 className="h-8 w-8" />
@@ -2969,7 +2970,7 @@ export default function ImproverPage() {
                     Mark this step as not possible
                   </label>
                   {stepNotPossibleSelected && (
-                    <div className="space-y-1">
+                    <div className="space-y-1.5">
                       <Label className="text-xs">Required Details</Label>
                       <Textarea
                         value={stepNotPossibleState.details}
@@ -3177,7 +3178,7 @@ export default function ImproverPage() {
                           )}
                         </div>
                       ) : (
-                        <div className="space-y-1">
+                        <div className="space-y-2">
                           <Label className="text-xs">{item.requires_photo ? "Upload Photos" : "Photo Attachment"}</Label>
                           <p className="text-xs text-muted-foreground">
                             {item.requires_photo
@@ -3248,7 +3249,7 @@ export default function ImproverPage() {
                       ))}
 
                     {item.requires_dropdown && (
-                      <div className="space-y-1">
+                      <div className="space-y-2">
                         <Label className="text-xs">Dropdown Selection</Label>
                         <Select
                           value={form.dropdown}
@@ -3283,7 +3284,7 @@ export default function ImproverPage() {
                     )}
 
                     {effectiveWrittenRequired && (
-                      <div className="space-y-1">
+                      <div className="space-y-2">
                         <Label className="text-xs">Written Response</Label>
                         <Textarea
                           value={form.written}
@@ -3371,7 +3372,7 @@ export default function ImproverPage() {
 
   if (!canUsePanel) {
     return (
-      <div className="container mx-auto p-4 space-y-4">
+      <div className="container mx-auto space-y-4">
         <Card>
           <CardHeader>
             <CardTitle>Improver Access Required</CardTitle>
@@ -3385,10 +3386,9 @@ export default function ImproverPage() {
   }
 
   return (
-    <div className="container mx-auto p-4 space-y-6">
+    <div className="container mx-auto space-y-6">
       <div>
         <h1 className="text-3xl font-bold">Improver Panel</h1>
-        <p className="text-muted-foreground">Claim workflow steps, submit work evidence, and complete assigned steps.</p>
       </div>
 
       {error && (
@@ -3440,7 +3440,6 @@ export default function ImproverPage() {
             <Card>
               <CardHeader>
                 <CardTitle>No Eligible Workflows</CardTitle>
-                <CardDescription>No workflows are currently available for you to claim.</CardDescription>
               </CardHeader>
             </Card>
 	          ) : (
@@ -3451,7 +3450,7 @@ export default function ImproverPage() {
 	                  className="cursor-pointer transition-colors hover:bg-muted/30"
 	                  onClick={() => openWorkflowDetails(workflow.id)}
 	                >
-                  <CardContent className="pt-4 space-y-3">
+                  <CardContent className="pt-card space-y-3">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div>
                         <h4 className="font-semibold">{workflow.title}</h4>
@@ -3517,11 +3516,6 @@ export default function ImproverPage() {
             <Card>
               <CardHeader>
                 <CardTitle>No Claimed Workflows</CardTitle>
-                <CardDescription>
-                  {showOnlyActiveSeries
-                    ? "No workflows match your filter."
-                    : "Workflows you claim will appear here."}
-                </CardDescription>
               </CardHeader>
             </Card>
           ) : (
@@ -3548,7 +3542,7 @@ export default function ImproverPage() {
                       )}
                       onClick={() => void openSeriesWorkflowDetails(group, cardIndex)}
                     >
-                      <CardContent className="pt-4 space-y-3">
+                      <CardContent className="pt-card space-y-3">
                         <div className="flex flex-wrap items-center justify-between gap-2">
                           <div>
                             <h4 className="font-semibold">{workflow.title}</h4>
@@ -3638,10 +3632,10 @@ export default function ImproverPage() {
           ) : (
 	          <Card>
 	            <CardHeader>
-	              <CardTitle>Unpaid Workflows</CardTitle>
-	              <CardDescription>
-	                Completed work awaiting payout finalization. If a payout failed, request a retry here.
-	              </CardDescription>
+	              <CardTitle className="flex items-center gap-2">
+	                Unpaid Workflows
+	                <InfoTip>Completed work awaiting payout finalization. If a payout failed, request a retry here.</InfoTip>
+	              </CardTitle>
 	            </CardHeader>
 	            <CardContent className="space-y-3">
 	              <div className="relative">
@@ -3667,7 +3661,7 @@ export default function ImproverPage() {
 
                   return (
 	                    <Card key={`unpaid-${workflow.id}`}>
-	                      <CardContent className="pt-4 space-y-3">
+	                      <CardContent className="p-4 space-y-3">
 	                        <div className="flex flex-wrap items-center justify-between gap-2">
 	                          <div>
 	                            <h4 className="font-semibold">{workflow.title}</h4>
@@ -3691,9 +3685,6 @@ export default function ImproverPage() {
                                 {failedUnpaidSteps.length === 1
                                   ? "1 payout needs attention"
                                   : `${failedUnpaidSteps.length} payouts need attention`}
-                              </p>
-                              <p className="text-xs text-red-600/90 dark:text-red-300/90">
-                                Retry failed payouts here without opening each step individually.
                               </p>
                             </div>
                             <Button
@@ -3778,7 +3769,6 @@ export default function ImproverPage() {
                 <Award className="h-5 w-5" />
                 My Badges
               </CardTitle>
-              <CardDescription>Credential badges associated with your currently active credentials.</CardDescription>
             </CardHeader>
             <CardContent>
               {myBadgeItems.length === 0 ? (
@@ -3878,7 +3868,6 @@ export default function ImproverPage() {
           <Card>
             <CardHeader>
               <CardTitle>Credential Requests</CardTitle>
-              <CardDescription>Request additional credentials for future workflow claims.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               {requestableCredentialTypes.length === 0 ? (
@@ -3963,20 +3952,25 @@ export default function ImproverPage() {
           ) : (
           <Card>
             <CardHeader>
-              <CardTitle>Recurring Absence Coverage</CardTitle>
-            <CardDescription>
-              Set an absent period for a recurring claimed workpiece so other qualified improvers can claim those occurrences while you are away.
-            </CardDescription>
+              <CardTitle className="flex items-center gap-2">
+                Recurring Absence Coverage
+                <InfoTip>
+                  Set an absent period for a recurring claimed workpiece so other qualified improvers can claim those occurrences while you are away.
+                </InfoTip>
+              </CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
               {recurringClaimOptions.length === 0 ? (
                 <p className="text-sm text-muted-foreground">
-                  No recurring claimed workpieces found yet. Claim a recurring workflow step first to configure absence coverage.
+                  <span className="inline-flex items-center gap-1.5">
+                    No recurring claimed workpieces found yet.
+                    <InfoTip>Claim a recurring workflow step first to configure absence coverage.</InfoTip>
+                  </span>
                 </p>
               ) : (
                 <>
                   <div className="grid gap-4 md:grid-cols-2">
-                    <div className="space-y-1">
+                    <div className="space-y-2">
                       <Label>Coverage Target</Label>
                       <Select
                         value={absenceTargetMode}
@@ -3992,7 +3986,7 @@ export default function ImproverPage() {
                       </Select>
                     </div>
                     {absenceTargetMode === "single" && (
-                      <div className="space-y-1">
+                      <div className="space-y-2">
                         <Label>Recurring Claimed Workpiece</Label>
                         <Select value={absenceSelection} onValueChange={setAbsenceSelection}>
                           <SelectTrigger>
@@ -4008,7 +4002,7 @@ export default function ImproverPage() {
                         </Select>
                       </div>
                     )}
-                    <div className="space-y-1">
+                    <div className="space-y-2">
                       <Label>Absent Start Date</Label>
                       <Input
                         type="date"
@@ -4016,7 +4010,7 @@ export default function ImproverPage() {
                         onChange={(e) => setAbsenceFrom(e.target.value)}
                       />
                     </div>
-                    <div className="space-y-1">
+                    <div className="space-y-2">
                       <Label>Absent End Date</Label>
                       <Input
                         type="date"
@@ -4060,7 +4054,7 @@ export default function ImproverPage() {
                       <p>Series: {period.series_id}</p>
                       {editingAbsenceId === period.id ? (
                         <div className="grid gap-2 pt-1 sm:grid-cols-2">
-                          <div className="space-y-1">
+                          <div className="space-y-2">
                             <Label className="text-xs">Absent Start Date</Label>
                             <Input
                               type="date"
@@ -4069,7 +4063,7 @@ export default function ImproverPage() {
                               disabled={Boolean(submitting)}
                             />
                           </div>
-                          <div className="space-y-1">
+                          <div className="space-y-2">
                             <Label className="text-xs">Absent End Date</Label>
                             <Input
                               type="date"
@@ -4143,10 +4137,9 @@ export default function ImproverPage() {
           }
         }}
       >
-        <DialogContent className="w-[95vw] max-w-2xl">
+        <DialogContent className="w-[95vw] max-w-2xl" aria-describedby={undefined}>
           <DialogHeader>
             <DialogTitle>{localPhotoPreview?.label || "Photo Preview"}</DialogTitle>
-            <DialogDescription>Preview selected photo before submitting the workflow step.</DialogDescription>
           </DialogHeader>
           {localPhotoPreview ? (
             <div className="space-y-3">
@@ -4175,10 +4168,9 @@ export default function ImproverPage() {
           }
         }}
       >
-        <DialogContent className="w-[95vw] max-w-md sm:max-w-lg">
+        <DialogContent className="w-[95vw] max-w-md sm:max-w-lg" aria-describedby={undefined}>
           <DialogHeader>
             <DialogTitle>{badgePreview?.label || "Badge Preview"}</DialogTitle>
-            <DialogDescription>Tap outside or close to return to your badges.</DialogDescription>
           </DialogHeader>
           {badgePreview ? (
             <div className="space-y-3">

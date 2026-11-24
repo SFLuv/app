@@ -5,7 +5,8 @@ import { CheckCircle2, FileText, Loader2, Search, Send, XCircle } from "lucide-r
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { InfoTip } from "@/components/ui/info-tip"
 import { Input } from "@/components/ui/input"
 import { useApp } from "@/context/AppProvider"
 import type { W9RequestResult, W9UserStatus } from "@/types/w9"
@@ -122,15 +123,15 @@ export function W9RequestPanel() {
 
   return (
     <Card>
-      <CardHeader className="pb-4">
+      <CardHeader>
         <CardTitle className="flex items-center gap-2 text-xl">
           <FileText className="h-6 w-6" />
           Request a W-9
+          <InfoTip>
+            Search for someone and send them the W-9 form. They get an email with the link, a push notification,
+            and a prompt in the app.
+          </InfoTip>
         </CardTitle>
-        <CardDescription className="text-base mt-2">
-          Search for someone and send them the W-9 form. They get an email with the link, a push notification,
-          and a prompt in the app.
-        </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="relative">

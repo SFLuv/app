@@ -4,6 +4,7 @@ import { DragEvent, MouseEvent, PointerEvent, WheelEvent, useCallback, useEffect
 import { useApp } from "@/context/AppProvider"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { InfoTip } from "@/components/ui/info-tip"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
@@ -2355,7 +2356,7 @@ export default function ProposerPage() {
 
   if (!isApproved) {
     return (
-      <div className="container mx-auto p-4 space-y-4">
+      <div className="container mx-auto space-y-4">
         <Card>
           <CardHeader>
             <CardTitle>Proposer Access Required</CardTitle>
@@ -2369,10 +2370,9 @@ export default function ProposerPage() {
   }
 
   return (
-    <div className="container mx-auto p-4 space-y-6">
+    <div className="container mx-auto space-y-6">
       <div>
         <h1 className="text-3xl font-bold">Proposer Panel</h1>
-        <p className="text-muted-foreground">Design workflow proposals with role gates, sequential steps, and step bounties.</p>
       </div>
 
       {error && (
@@ -2398,19 +2398,21 @@ export default function ProposerPage() {
         <TabsContent value="create-workflow" className="mt-4 space-y-6">
           {!createDataLoaded ? (
             <Card>
-              <CardContent className="flex min-h-[320px] items-center justify-center">
+              <CardContent className="flex min-h-[320px] items-center justify-center pt-card">
                 <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
               </CardContent>
             </Card>
           ) : (
           <Card>
             <CardHeader>
-              <CardTitle>{isEditProposalMode ? "Edit Workflow Proposal" : "Create Workflow Proposal"}</CardTitle>
-              <CardDescription>
-                {isEditProposalMode
-                  ? "Propose a new workflow state for this recurring series. Existing workflows keep their current state snapshots."
-                  : "Steps unlock sequentially. Each step has one assignee role and configurable work-item evidence requirements."}
-              </CardDescription>
+              <CardTitle className="flex items-center gap-2">
+                {isEditProposalMode ? "Edit Workflow Proposal" : "Create Workflow Proposal"}
+                <InfoTip>
+                  {isEditProposalMode
+                    ? "Propose a new workflow state for this recurring series. Existing workflows keep their current state snapshots."
+                    : "Steps unlock sequentially. Each step has one assignee role and configurable work-item evidence requirements."}
+                </InfoTip>
+              </CardTitle>
             </CardHeader>
             <CardContent className="space-y-6">
               <div className="flex flex-wrap items-center gap-3">
@@ -2442,7 +2444,7 @@ export default function ProposerPage() {
 	              <Card>
 	                <Collapsible open={templateLibraryOpen} onOpenChange={setTemplateLibraryOpen}>
 	                  <CardHeader
-	                    className="cursor-pointer pb-3"
+	                    className="cursor-pointer"
 	                    onClick={(event) => {
 	                      if (didClickInteractiveElement(event)) return
 	                      setTemplateLibraryOpen((prev) => !prev)
@@ -2450,10 +2452,12 @@ export default function ProposerPage() {
 	                  >
 	                    <div className="flex items-center justify-between gap-3">
 	                      <div>
-	                        <CardTitle className="text-base">Template Library</CardTitle>
-	                        <CardDescription>
-	                          Apply a saved template to prefill workflow fields. Workflow title and description stay manual.
-	                        </CardDescription>
+	                        <CardTitle className="flex items-center gap-2 text-base">
+	                          Template Library
+	                          <InfoTip>
+	                            Apply a saved template to prefill workflow fields. Workflow title and description stay manual.
+	                          </InfoTip>
+	                        </CardTitle>
 	                      </div>
 	                      <div className="flex items-center gap-2 shrink-0">
 	                        <Badge variant="outline" className="shrink-0">
@@ -2692,7 +2696,7 @@ export default function ProposerPage() {
 	          <Card>
 	            <Collapsible open={workflowSupervisorOpen} onOpenChange={setWorkflowSupervisorOpen}>
 	              <CardHeader
-	                className="cursor-pointer pb-3"
+	                className="cursor-pointer"
 	                onClick={(event) => {
 	                  if (didClickInteractiveElement(event)) return
 	                  setWorkflowSupervisorOpen((prev) => !prev)
@@ -2700,10 +2704,10 @@ export default function ProposerPage() {
 	              >
 	                <div className="flex items-center justify-between gap-3">
 	                  <div>
-	                    <CardTitle className="text-base">Workflow Supervisor (Optional)</CardTitle>
-	                    <CardDescription>
-	                      Assign an approved supervisor to oversee this workflow and review its reported data.
-	                    </CardDescription>
+	                    <CardTitle className="flex items-center gap-2 text-base">
+	                      Workflow Supervisor (Optional)
+	                      <InfoTip>Assign an approved supervisor to oversee this workflow and review its reported data.</InfoTip>
+	                    </CardTitle>
 	                  </div>
 	                  <div className="flex items-center gap-2">
 	                    {workflowSupervisor.enabled && <Badge variant="outline">Enabled</Badge>}
@@ -2763,11 +2767,9 @@ export default function ProposerPage() {
 	                      </div>
 	                      <div className="space-y-3">
 	                        <div className="flex items-center justify-between gap-2">
-	                          <div>
+	                          <div className="flex items-center gap-1.5">
 	                            <Label>Supervisor Data Fields (Optional)</Label>
-	                            <p className="text-xs text-muted-foreground">
-	                              Add key/value metadata tags for supervisor export records.
-	                            </p>
+	                            <InfoTip>Add key/value metadata tags for supervisor export records.</InfoTip>
 	                          </div>
 	                          <Button type="button" variant="outline" size="sm" onClick={addWorkflowSupervisorDataField}>
 	                            <Plus className="mr-2 h-4 w-4" />
@@ -2828,7 +2830,7 @@ export default function ProposerPage() {
               }}
             >
               <CardHeader
-                className="cursor-pointer pb-3"
+                className="cursor-pointer"
                 onClick={(event) => {
                   if (didClickInteractiveElement(event)) return
                   const nextOpen = !workflowRolesOpen
@@ -2846,7 +2848,6 @@ export default function ProposerPage() {
                 <div className="flex items-center justify-between gap-3">
                   <div>
                     <CardTitle className="text-base">Workflow Roles</CardTitle>
-                    <CardDescription>Define required roles and credentials for workflow assignments.</CardDescription>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
                     <Badge variant="outline" className="shrink-0">
@@ -2882,7 +2883,7 @@ export default function ProposerPage() {
                           }
                         >
 	                          <CardHeader
-	                            className="cursor-pointer pb-3"
+	                            className="cursor-pointer"
 	                            onClick={(event) => {
 	                              if (didClickInteractiveElement(event)) return
 	                              setRoleCardOpenState((prev) => ({
@@ -3000,7 +3001,7 @@ export default function ProposerPage() {
             </Collapsible>
           </Card>
 
-          <div className="space-y-4">
+          <div className="space-y-3">
             <h3 className="text-lg font-medium">Workflow Steps</h3>
 
             {steps.map((step, stepIndex) => {
@@ -3066,7 +3067,7 @@ export default function ProposerPage() {
                       }}
                     >
 	                      <CardHeader
-	                        className="cursor-pointer pb-3"
+	                        className="cursor-pointer"
 	                        onClick={(event) => {
 	                          if (didClickInteractiveElement(event)) return
                           const nextOpen = !stepCardOpen
@@ -3106,7 +3107,7 @@ export default function ProposerPage() {
                             </div>
                           </div>
                           <div className="flex items-center gap-1">
-                            <div className="inline-flex items-center gap-2 rounded-full border border-border/70 bg-muted/40 px-2.5 py-1 text-xs shadow-sm">
+                            <div className="inline-flex items-center gap-2 rounded-full border border-border/70 bg-muted/40 px-2 py-1 text-xs shadow-sm">
                               <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
                                 Bounty
                               </span>
@@ -3193,7 +3194,7 @@ export default function ProposerPage() {
                     Enable "Step not possible" option (requires details, ends workflow with no payouts)
                   </label>
 
-                  <div className="space-y-4">
+                  <div className="space-y-3">
                     <Label>Work Items</Label>
 
                     {step.work_items.map((item, itemIndex) => {
@@ -3262,7 +3263,7 @@ export default function ProposerPage() {
                               }
                             >
 	                              <CardHeader
-	                                className="cursor-pointer pb-3 pt-4"
+	                                className="cursor-pointer pt-4"
 	                                onClick={(event) => {
 	                                  if (didClickInteractiveElement(event)) return
 	                                  setWorkItemCardOpenState((prev) => ({
@@ -3394,7 +3395,7 @@ export default function ProposerPage() {
                               </label>
 
                               <div className="grid gap-3 md:grid-cols-3">
-                                <div className="space-y-1">
+                                <div className="space-y-2">
                                   <Label className="text-xs">Photo Aspect Ratio</Label>
                                   <Select
                                     value={normalizeWorkflowPhotoAspectRatio(item.photo_aspect_ratio)}
@@ -3415,7 +3416,7 @@ export default function ProposerPage() {
                                   </Select>
                                 </div>
 
-                                <div className="space-y-1 md:col-span-2">
+                                <div className="space-y-2 md:col-span-2">
                                   <Label className="text-xs">Photo Count Requirement</Label>
                                   <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                                     <label className="flex items-center gap-2 text-xs">
@@ -3615,7 +3616,7 @@ export default function ProposerPage() {
                                             />
                                             Require live photo
                                           </label>
-                                          <div className="space-y-1">
+                                          <div className="space-y-2">
                                             <Label className="text-xs">Photo Instructions</Label>
                                             <Textarea
                                               value={option.photo_instructions || ""}
@@ -3665,7 +3666,7 @@ export default function ProposerPage() {
                                         Add Email
                                       </Button>
                                     </div>
-                                    <div className="space-y-1">
+                                    <div className="space-y-2">
                                       <Label className="text-xs">Email Subject (Optional)</Label>
                                       <Input
                                         value={option.notify_email_subject || ""}
@@ -3788,11 +3789,6 @@ export default function ProposerPage() {
           <Card>
             <CardHeader>
               <CardTitle>{isAdminUser ? "All Workflows" : "Your Workflows"}</CardTitle>
-              <CardDescription>
-                {isAdminUser
-                  ? "Review workflows across all proposers, search by title or description, and filter by proposer."
-                  : "Review only your submitted workflows, filter by status, and propose deletions for active workflows."}
-              </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               {!workflowListLoaded ? (
@@ -3890,7 +3886,7 @@ export default function ProposerPage() {
                   return (
                   <Card key={group.key}>
                     <CardContent
-                      className="pt-4 cursor-pointer transition-colors hover:bg-muted/30"
+                      className="pt-card cursor-pointer transition-colors hover:bg-muted/30"
                       onClick={() => void openWorkflowDetails(workflow.id, workflow)}
                     >
                       <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
@@ -4133,15 +4129,12 @@ export default function ProposerPage() {
           }
         }}
       >
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-w-md" aria-describedby={undefined}>
           <DialogHeader>
             <DialogTitle>Save As Template</DialogTitle>
-            <DialogDescription>
-              Save this approved workflow structure as a reusable template.
-            </DialogDescription>
           </DialogHeader>
-          <div className="space-y-3">
-            <div className="space-y-1">
+          <div className="space-y-4">
+            <div className="space-y-2">
               <Label>Template Title</Label>
               <Input
                 value={saveFromWorkflowTitle}
@@ -4149,7 +4142,7 @@ export default function ProposerPage() {
                 placeholder="Template title"
               />
             </div>
-            <div className="space-y-1">
+            <div className="space-y-2">
               <Label>Template Description</Label>
               <Textarea
                 value={saveFromWorkflowDescription}

@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useMemo, useState } from "react"
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -129,15 +129,12 @@ export function NewWalletModal({ open, onOpenChange, addWalletFunction: addWalle
 
   return (
     <Dialog open={open} onOpenChange={handleModalClose}>
-      <DialogContent className="w-[95vw] max-w-md mx-auto max-h-[90vh] overflow-y-auto rounded-lg">
-        <DialogHeader className="space-y-2 pb-2">
+      <DialogContent className="w-[95vw] max-w-md mx-auto max-h-[90vh] overflow-y-auto rounded-lg" aria-describedby={undefined}>
+        <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-lg sm:text-xl">
             <Wallet className="h-4 w-4 sm:h-5 sm:w-5" />
             Connect Wallet
           </DialogTitle>
-          <DialogDescription className="text-sm">
-            Import your existing wallet by providing a name and private key
-          </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4 sm:space-y-6">

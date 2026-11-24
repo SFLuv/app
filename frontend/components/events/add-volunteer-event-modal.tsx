@@ -7,13 +7,13 @@ import { Button } from "@/components/ui/button"
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
+import { InfoTip } from "@/components/ui/info-tip"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
@@ -554,18 +554,22 @@ export function AddVolunteerEventModal({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl" aria-describedby={undefined}>
         <DialogHeader>
-          <DialogTitle>{editEvent ? "Edit Volunteer Event" : "New Volunteer Event"}</DialogTitle>
-          <DialogDescription>
-            Published to the volunteers panel on the app and sfluv.org. QR codes are minted now and become
-            redeemable 24 hours before the event starts.
-          </DialogDescription>
+          <DialogTitle>
+            <span className="inline-flex items-center gap-1.5">
+              {editEvent ? "Edit Volunteer Event" : "New Volunteer Event"}
+              <InfoTip>
+                Published to the volunteers panel on the app and sfluv.org. QR codes are minted now and become
+                redeemable 24 hours before the event starts.
+              </InfoTip>
+            </span>
+          </DialogTitle>
         </DialogHeader>
 
         <div className="space-y-5">
           {createdBy !== "" && (
-            <div className="space-y-1">
+            <div className="space-y-2">
               <Label htmlFor="ve-created-by">Created by</Label>
               <Input id="ve-created-by" value={createdBy} disabled readOnly />
               <p className="text-xs text-muted-foreground">
@@ -574,12 +578,12 @@ export function AddVolunteerEventModal({
             </div>
           )}
 
-          <div className="space-y-1">
+          <div className="space-y-2">
             <Label htmlFor="ve-title">Title *</Label>
             <Input id="ve-title" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Ocean Beach Cleanup" />
           </div>
 
-          <div className="space-y-1">
+          <div className="space-y-2">
             <Label htmlFor="ve-description">Description</Label>
             <Textarea
               id="ve-description"
@@ -699,18 +703,18 @@ export function AddVolunteerEventModal({
             )}
           </div>
 
-          <div className="grid gap-3 sm:grid-cols-2">
-            <div className="space-y-1">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-2">
               <Label htmlFor="ve-start">Starts *</Label>
               <Input id="ve-start" type="datetime-local" value={startAtLocal} onChange={(e) => setStartAtLocal(e.target.value)} />
             </div>
-            <div className="space-y-1">
+            <div className="space-y-2">
               <Label htmlFor="ve-end">Ends *</Label>
               <Input id="ve-end" type="datetime-local" value={endAtLocal} onChange={(e) => setEndAtLocal(e.target.value)} />
             </div>
           </div>
 
-          <div className="space-y-1">
+          <div className="space-y-2">
             <Label>Timezone</Label>
             <Select value={timezone} onValueChange={setTimezone}>
               <SelectTrigger><SelectValue /></SelectTrigger>
@@ -762,7 +766,7 @@ export function AddVolunteerEventModal({
             )}
 
             {frequency !== "none" && (
-              <div className="space-y-1">
+              <div className="space-y-2">
                 <Label htmlFor="ve-until">Repeat until (optional)</Label>
                 <Input id="ve-until" type="datetime-local" value={untilLocal} onChange={(e) => setUntilLocal(e.target.value)} />
               </div>
@@ -783,7 +787,7 @@ export function AddVolunteerEventModal({
             {useCustomCutoff ? (
               <>
                 <div className="grid gap-3 sm:grid-cols-2">
-                  <div className="space-y-1">
+                  <div className="space-y-2">
                     <Label htmlFor="ve-qr-live" className="text-xs font-normal text-muted-foreground">
                       Hours before start
                     </Label>
@@ -796,7 +800,7 @@ export function AddVolunteerEventModal({
                       onChange={(event) => setQrLiveOffsetHours(event.target.value)}
                     />
                   </div>
-                  <div className="space-y-1">
+                  <div className="space-y-2">
                     <Label htmlFor="ve-qr-expiry" className="text-xs font-normal text-muted-foreground">
                       Hours after end
                     </Label>
@@ -825,8 +829,8 @@ export function AddVolunteerEventModal({
             )}
           </div>
 
-          <div className="grid gap-3 sm:grid-cols-2">
-            <div className="space-y-1">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-2">
               <Label htmlFor="ve-max">Max participants *</Label>
               <Input
                 id="ve-max"
@@ -836,7 +840,7 @@ export function AddVolunteerEventModal({
                 onChange={(e) => setMaxParticipants(Number(e.target.value))}
               />
             </div>
-            <div className="space-y-1">
+            <div className="space-y-2">
               <Label htmlFor="ve-reward">Reward per participant (SFLUV) *</Label>
               <Input
                 id="ve-reward"

@@ -4,7 +4,8 @@ import { useCallback, useEffect, useRef, useState } from "react"
 import { ImagePlus, Loader2, Trash2, ZoomIn, ZoomOut } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { InfoTip } from "@/components/ui/info-tip"
 import { useApp } from "@/context/AppProvider"
 import { useToast } from "@/hooks/use-toast"
 import { MerchantMapPin } from "@/components/locations/merchant-pin"
@@ -249,12 +250,16 @@ export function MerchantIconCard({ location, onSaved }: MerchantIconCardProps) {
           }
         }}
       >
-        <DialogContent className="sm:max-w-[560px]">
+        <DialogContent className="sm:max-w-[560px]" aria-describedby={undefined}>
           <DialogHeader>
-            <DialogTitle>Crop your icon</DialogTitle>
-            <DialogDescription>
-              Drag to reposition and zoom to frame. Icons are square — what you see in the circle is what appears on your pin.
-            </DialogDescription>
+            <DialogTitle>
+              <span className="inline-flex items-center gap-1.5">
+                Crop your icon
+                <InfoTip>
+                  Drag to reposition and zoom to frame. Icons are square — what you see in the circle is what appears on your pin.
+                </InfoTip>
+              </span>
+            </DialogTitle>
           </DialogHeader>
 
           <div className="flex flex-col items-center gap-5 sm:flex-row sm:items-start">

@@ -163,18 +163,18 @@ export function RefundModal({
 
   return (
     <Dialog open={open} onOpenChange={(next) => (busy ? null : onOpenChange(next))}>
-      <DialogContent>
+      {/* Only the confirm step keeps a description (the consequence), so the
+          other steps opt out of aria-describedby rather than point at nothing. */}
+      <DialogContent {...(step === "confirm" ? {} : { "aria-describedby": undefined })}>
         <DialogHeader>
           <DialogTitle>
             {step === "details" && "Refund this payment"}
             {step === "amount" && "How much?"}
             {step === "confirm" && "Confirm refund"}
           </DialogTitle>
-          <DialogDescription>
-            {step === "details" && "Check this is the right payment before refunding it."}
-            {step === "amount" && "Refund all of what's left, or part of it."}
-            {step === "confirm" && "This sends tokens back to the customer straight away."}
-          </DialogDescription>
+          {step === "confirm" && (
+            <DialogDescription>This sends tokens back to the customer straight away.</DialogDescription>
+          )}
         </DialogHeader>
 
         {step === "details" && (
@@ -230,7 +230,7 @@ export function RefundModal({
                     </Button>
                   ))}
                 </div>
-                <div className="space-y-1">
+                <div className="space-y-2">
                   <Label htmlFor="refund-amount" className="text-xs text-muted-foreground">
                     Or an exact amount
                   </Label>
@@ -276,7 +276,7 @@ export function RefundModal({
           </div>
         )}
 
-        <DialogFooter className="gap-2 sm:gap-2">
+        <DialogFooter>
           {step !== "details" && (
             <Button
               type="button"

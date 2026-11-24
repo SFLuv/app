@@ -12,6 +12,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import { InfoTip } from "@/components/ui/info-tip"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
@@ -174,11 +175,17 @@ export function EventBlastModal({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="flex max-h-[90vh] flex-col overflow-hidden sm:max-w-4xl">
         <DialogHeader>
-          <DialogTitle>Message volunteers</DialogTitle>
+          <DialogTitle>
+            <span className="inline-flex items-center gap-1.5">
+              Message volunteers
+              <InfoTip>
+                Volunteers with the app get a push notification; everyone else gets an email.
+              </InfoTip>
+            </span>
+          </DialogTitle>
           <DialogDescription className="flex items-center gap-1.5">
             <Users className="h-3.5 w-3.5" />
-            {eventTitle} · {signupCount} signed up. Volunteers with the app get a push notification; everyone
-            else gets an email.
+            {eventTitle} · {signupCount} signed up.
           </DialogDescription>
         </DialogHeader>
 

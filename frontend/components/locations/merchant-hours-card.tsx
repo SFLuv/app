@@ -94,7 +94,7 @@ export function MerchantHoursCard({ location, onSaved }: MerchantHoursCardProps)
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
       <OpeningHoursEditor
         week={week}
         onChange={(next) => {

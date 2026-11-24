@@ -78,7 +78,7 @@ export function CreateOpportunityModal({ isOpen, onClose, onCreateOpportunity }:
         <DialogHeader>
           <DialogTitle>Create New Opportunity</DialogTitle>
         </DialogHeader>
-        <form onSubmit={handleSubmit} className="space-y-4 py-4">
+        <form onSubmit={handleSubmit} className="space-y-4">
           <div className="grid grid-cols-1 gap-4">
             <div className="space-y-2">
               <Label htmlFor="title">Title</Label>

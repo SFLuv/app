@@ -4,7 +4,8 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import { ArrowLeft, History, Loader2, Plus, Trash2 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { InfoTip } from "@/components/ui/info-tip"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -134,16 +135,18 @@ export function FormEditor({ formId, onBack, onSaved }: Props) {
 
       <Card>
         <CardHeader>
-          <CardTitle>{formId === null ? "New form" : `Edit “${detail?.current.title ?? ""}”`}</CardTitle>
-          <CardDescription>
-            {formId === null
-              ? "Write the form people will sign. It stays closed until you open it for signing."
-              : "Saving adds a new version. People who already signed are not affected: each signature is kept with the exact wording that person agreed to."}
-          </CardDescription>
+          <CardTitle className="flex items-center gap-2">
+            {formId === null ? "New form" : `Edit “${detail?.current.title ?? ""}”`}
+            <InfoTip>
+              {formId === null
+                ? "Write the form people will sign. It stays closed until you open it for signing."
+                : "Saving adds a new version. People who already signed are not affected: each signature is kept with the exact wording that person agreed to."}
+            </InfoTip>
+          </CardTitle>
         </CardHeader>
         <CardContent className="space-y-6">
           <div className="grid gap-4 sm:grid-cols-2">
-            <div className="space-y-1 sm:col-span-2">
+            <div className="space-y-2 sm:col-span-2">
               <Label htmlFor="form-title">Title</Label>
               <Input
                 id="form-title"
@@ -159,7 +162,7 @@ export function FormEditor({ formId, onBack, onSaved }: Props) {
 
             {formId === null ? (
               <>
-                <div className="space-y-1">
+                <div className="space-y-2">
                   <Label htmlFor="form-slug">Web address</Label>
                   <Input
                     id="form-slug"
@@ -174,7 +177,7 @@ export function FormEditor({ formId, onBack, onSaved }: Props) {
                     {addressPreview ? `People will visit ${addressPreview}. ` : ""}This can’t be changed later, because printed QR codes point to it.
                   </p>
                 </div>
-                <div className="space-y-1">
+                <div className="space-y-2">
                   <Label>Type</Label>
                   <Select value={kind} onValueChange={(v) => setKind(v as "waiver" | "withdrawal")}>
                     <SelectTrigger>
@@ -193,7 +196,7 @@ export function FormEditor({ formId, onBack, onSaved }: Props) {
               </p>
             )}
 
-            <div className="space-y-1 sm:col-span-2">
+            <div className="space-y-2 sm:col-span-2">
               <Label htmlFor="form-summary">One-line summary (shown on the Forms and Waivers page)</Label>
               <Input
                 id="form-summary"
@@ -239,14 +242,16 @@ export function FormEditor({ formId, onBack, onSaved }: Props) {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-lg">What people are asked</CardTitle>
-          <CardDescription>
-            Everyone is always asked for their full name, a signature, and to agree to sign electronically. Choose what else to ask.
-          </CardDescription>
+          <CardTitle className="flex items-center gap-2 text-lg">
+            What people are asked
+            <InfoTip>
+              Everyone is always asked for their full name, a signature, and to agree to sign electronically. Choose what else to ask.
+            </InfoTip>
+          </CardTitle>
         </CardHeader>
         <CardContent className="space-y-6">
           <div className="grid gap-4 sm:grid-cols-2">
-            <div className="space-y-1">
+            <div className="space-y-2">
               <Label>Email or phone</Label>
               <Select value={config.contact} onValueChange={(v) => patchConfig({ contact: v as SiteFormConfig["contact"] })}>
                 <SelectTrigger>
@@ -266,7 +271,7 @@ export function FormEditor({ formId, onBack, onSaved }: Props) {
               <Switch id="cfg-preferred" checked={config.preferred_name} onCheckedChange={(v) => patchConfig({ preferred_name: v })} />
             </div>
 
-            <div className="space-y-1">
+            <div className="space-y-2">
               <Label>Event or project</Label>
               <Select value={config.event} onValueChange={(v) => patchConfig({ event: v as SiteFormConfig["event"] })}>
                 <SelectTrigger>
@@ -280,7 +285,7 @@ export function FormEditor({ formId, onBack, onSaved }: Props) {
               </Select>
             </div>
             {config.event === "fixed" && (
-              <div className="space-y-1">
+              <div className="space-y-2">
                 <Label htmlFor="cfg-event">Event or project name</Label>
                 <Input
                   id="cfg-event"
@@ -293,25 +298,21 @@ export function FormEditor({ formId, onBack, onSaved }: Props) {
             )}
 
             <div className="flex items-center justify-between gap-3 rounded-lg border p-3 sm:col-span-2">
-              <div>
+              <div className="flex items-center gap-2">
                 <Label htmlFor="cfg-guardian">Include a parent or guardian section</Label>
-                <p className="text-xs text-muted-foreground">
-                  Lets someone under 18 be signed for by a parent or guardian, who also signs.
-                </p>
+                <InfoTip>Lets someone under 18 be signed for by a parent or guardian, who also signs.</InfoTip>
               </div>
               <Switch id="cfg-guardian" checked={config.guardian_section} onCheckedChange={(v) => patchConfig({ guardian_section: v })} />
             </div>
           </div>
 
           <div className="space-y-3 rounded-lg border p-4">
-            <div>
+            <div className="flex items-center gap-2">
               <p className="font-medium">Choices (optional)</p>
-              <p className="text-xs text-muted-foreground">
-                If you add choices, each person picks exactly one — for example “this event only” or “ongoing”.
-              </p>
+              <InfoTip>If you add choices, each person picks exactly one — for example “this event only” or “ongoing”.</InfoTip>
             </div>
             {hasChoices && (
-              <div className="space-y-1">
+              <div className="space-y-2">
                 <Label htmlFor="cfg-prompt">Question above the choices (optional)</Label>
                 <Input
                   id="cfg-prompt"
@@ -365,7 +366,7 @@ export function FormEditor({ formId, onBack, onSaved }: Props) {
             )}
           </div>
 
-          <div className="space-y-1">
+          <div className="space-y-2">
             <Label htmlFor="cfg-confirm">Message shown after someone signs</Label>
             <Input
               id="cfg-confirm"
@@ -391,10 +392,8 @@ export function FormEditor({ formId, onBack, onSaved }: Props) {
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-lg">
               <History className="h-4 w-4" /> Earlier versions
+              <InfoTip>“Use this version” loads its wording into the editor above. Nothing changes until you save.</InfoTip>
             </CardTitle>
-            <CardDescription>
-              “Use this version” loads its wording into the editor above. Nothing changes until you save.
-            </CardDescription>
           </CardHeader>
           <CardContent>
             <div className="divide-y rounded-lg border">

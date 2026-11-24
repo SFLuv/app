@@ -395,11 +395,12 @@ func (a *AppService) RequestOrganizationRole(w http.ResponseWriter, r *http.Requ
 		payload["url"] = base + "/admin"
 	}
 	a.notify(r.Context(), Alert{
-		Topic: structs.NotificationTopicOrganizationRole,
-		Key:   fmt.Sprintf("org_role:%d:%s", org.Id, roleType),
-		Kind:  structs.InternalKindNotice,
-		Title: fmt.Sprintf("%s asks to be %s", org.Name, roleType),
-		Body:  fmt.Sprintf("%s has asked for the %s role. Decide it in the admin panel's Organizations tab.", org.Name, roleType),
+		Topic:    structs.NotificationTopicOrganizationRole,
+		Key:      fmt.Sprintf("org_role:%d:%s", org.Id, roleType),
+		Kind:     structs.InternalKindNotice,
+		Title:    fmt.Sprintf("%s asks to be %s", org.Name, roleType),
+		Subtitle: org.Name + " · " + roleType,
+		Body:     fmt.Sprintf("%s has asked for the %s role. Decide it in the admin panel's Organizations tab.", org.Name, roleType),
 		Fields: []structs.NotificationField{
 			{Label: "Organization", Value: org.Name},
 			{Label: "Role", Value: roleType},

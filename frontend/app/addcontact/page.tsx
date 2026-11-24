@@ -27,7 +27,7 @@ export default function AddContactQueryPage() {
   }
 
   return (
-    <main className="mx-auto flex min-h-[70vh] max-w-lg items-center justify-center px-4">
+    <main className="mx-auto flex min-h-[70vh] max-w-lg items-center justify-center">
       <Card className="w-full">
         <CardHeader>
           <CardTitle className="flex items-center gap-2">

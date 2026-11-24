@@ -5,6 +5,7 @@ import { useApp } from "@/context/AppProvider"
 import { cn } from "@/lib/utils"
 import { useIsMobile } from "@/hooks/use-mobile"
 import {
+  BellRing,
   Building2,
   ClipboardCheck,
   ClipboardList,
@@ -69,6 +70,27 @@ export function DashboardSidebar() {
       cancelled = true
     }
   }, [siteFetch, status, user?.id, user?.isAdmin])
+
+  // The Notification Hub is for the house organization's admins and for the
+  // leads and admins of its teams. The backend decides; this only asks.
+  const [canOpenHub, setCanOpenHub] = useState(false)
+  useEffect(() => {
+    if (status !== "authenticated" || !user) {
+      setCanOpenHub(false)
+      return
+    }
+    let cancelled = false
+    siteFetch("/organizations/mine/notification-hub/access")
+      .then((res) => {
+        if (!cancelled) setCanOpenHub(res.ok)
+      })
+      .catch(() => {
+        if (!cancelled) setCanOpenHub(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [siteFetch, status, user?.id])
 
   // The signup answer counts as much as the role here: isMerchant is recomputed
   // from approved listings, so a merchant whose first shop is still in review
@@ -310,6 +332,10 @@ export function DashboardSidebar() {
 
     if (canEditWebsite) {
       items = [...items, { title: "Website", icon: Globe, path: "/website" }]
+    }
+
+    if (canOpenHub) {
+      items = [...items, { title: "Notification Hub", icon: BellRing, path: "/notification-hub" }]
     }
 
     if (user?.isAdmin) {

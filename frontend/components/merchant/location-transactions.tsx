@@ -5,7 +5,7 @@ import { formatUnits } from "viem"
 import { ArrowDownLeft, ArrowUpRight, Loader2, RefreshCw, Undo2 } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { useApp } from "@/context/AppProvider"
 import { useChainConfig } from "@/context/ChainConfigProvider"
 import { RefundModal } from "@/components/merchant/refund-modal"
@@ -70,9 +70,6 @@ export function LocationTransactions({ locationId, locationName, tillWallet }: L
       <CardHeader className="flex flex-row items-start justify-between gap-4 space-y-0">
         <div>
           <CardTitle className="text-base">Transactions</CardTitle>
-          <CardDescription>
-            Money in and out of {locationName || "this location"}, newest first.
-          </CardDescription>
         </div>
         <Button type="button" variant="outline" size="sm" onClick={() => void load(page)} disabled={loading}>
           {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
@@ -82,7 +79,7 @@ export function LocationTransactions({ locationId, locationName, tillWallet }: L
         {loading && rows.length === 0 && <p className="py-6 text-center text-sm text-muted-foreground">Loading…</p>}
         {!loading && rows.length === 0 && (
           <p className="py-6 text-center text-sm text-muted-foreground">
-            No transactions yet. Payments to this location will appear here.
+            No transactions yet.
           </p>
         )}
 

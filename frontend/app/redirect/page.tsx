@@ -396,7 +396,7 @@ export default function RedirectPage() {
   }
 
   return (
-    <div className="flex min-h-[60vh] w-full items-center justify-center p-6">
+    <div className="flex min-h-[60vh] w-full items-center justify-center">
       <div className="w-full max-w-sm rounded-lg border bg-card p-6 shadow-sm">
         {renderBody()}
       </div>

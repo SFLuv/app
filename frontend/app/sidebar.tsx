@@ -46,7 +46,7 @@ export default function Sidebar({
       <div className="flex h-screen w-full overflow-hidden">
         <DashboardSidebar />
         <SidebarInset className="flex flex-col w-full">
-          <header className="h-16 border-b border-border/70 flex flex-row items-center px-4 bg-card/85 backdrop-blur-md w-full">
+          <header className="h-16 border-b border-border/70 flex flex-row items-center px-gutter bg-card/85 backdrop-blur-md w-full">
             <SidebarTrigger className="mr-4" />
             <h1 className="text-xl font-semibold mr-auto text-black dark:text-white">Dashboard</h1>
             {status !== "authenticated" && <Button
@@ -58,7 +58,7 @@ export default function Sidebar({
               Connect
             </Button>}
           </header>
-          <main className="flex-1 overflow-auto p-3 sm:p-6 w-full">{children}</main>
+          <main className="flex-1 overflow-auto px-gutter py-section w-full">{children}</main>
         </SidebarInset>
       </div>
     </SidebarProvider>

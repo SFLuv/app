@@ -5,8 +5,9 @@ import { Copy, ExternalLink, Loader2, Pencil, Plus, QrCode, Users } from "lucide
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { InfoTip } from "@/components/ui/info-tip"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { SfluvQRCode, type SfluvQRCodeHandle } from "@/components/ui/sfluv-qr-code"
@@ -122,11 +123,13 @@ export function FormsEditor() {
       <Card>
         <CardHeader className="flex flex-row items-start justify-between gap-4 space-y-0">
           <div className="space-y-1.5">
-            <CardTitle>Forms and waivers</CardTitle>
-            <CardDescription>
-              Forms people can sign on sfluv.org (About → Forms and Waivers). Open one when you need signatures and close
-              it when you are done — closed forms disappear from the list and stop accepting signatures.
-            </CardDescription>
+            <CardTitle className="flex items-center gap-2">
+              Forms and waivers
+              <InfoTip>
+                Forms people can sign on sfluv.org (About → Forms and Waivers). Open one when you need signatures and close
+                it when you are done — closed forms disappear from the list and stop accepting signatures.
+              </InfoTip>
+            </CardTitle>
           </div>
           <Button onClick={() => setView({ mode: "edit", id: null })}>
             <Plus className="mr-2 h-4 w-4" /> New form
@@ -198,14 +201,16 @@ export function FormsEditor() {
       </Card>
 
       <Dialog open={opening !== null} onOpenChange={(o) => !o && setOpening(null)}>
-        <DialogContent>
+        <DialogContent aria-describedby={undefined}>
           <DialogHeader>
-            <DialogTitle>Open “{opening?.title}” for signing</DialogTitle>
-            <DialogDescription>
-              It will appear on the Forms and Waivers page and its link and QR code will start working.
-            </DialogDescription>
+            <DialogTitle>
+              <span className="inline-flex items-center gap-1.5">
+                Open “{opening?.title}” for signing
+                <InfoTip>It will appear on the Forms and Waivers page and its link and QR code will start working.</InfoTip>
+              </span>
+            </DialogTitle>
           </DialogHeader>
-          <div className="space-y-1">
+          <div className="space-y-2">
             <Label htmlFor="closes-at">Close it automatically at (optional)</Label>
             <Input id="closes-at" type="datetime-local" value={closesAt} onChange={(e) => setClosesAt(e.target.value)} />
             <p className="text-xs text-muted-foreground">
@@ -225,13 +230,21 @@ export function FormsEditor() {
       </Dialog>
 
       <Dialog open={qrFor !== null} onOpenChange={(o) => !o && setQrFor(null)}>
-        <DialogContent className="max-w-sm">
+        <DialogContent
+          className="max-w-sm"
+          {...(qrFor && qrFor.status !== "open" ? {} : { "aria-describedby": undefined })}
+        >
           <DialogHeader>
-            <DialogTitle>QR code</DialogTitle>
-            <DialogDescription>
-              Anyone who scans this goes straight to “{qrFor?.title}”. Print it or hold it up at the event.
-              {qrFor && qrFor.status !== "open" ? " The form is not open yet, so the code won’t work until you open it." : ""}
-            </DialogDescription>
+            <DialogTitle>
+              <span className="inline-flex items-center gap-1.5">
+                QR code
+                <InfoTip>Anyone who scans this goes straight to “{qrFor?.title}”. Print it or hold it up at the event.</InfoTip>
+              </span>
+            </DialogTitle>
+            {/* A state, not a subtitle: a closed form's code goes nowhere yet. */}
+            {qrFor && qrFor.status !== "open" && (
+              <DialogDescription>The form is not open yet, so the code won’t work until you open it.</DialogDescription>
+            )}
           </DialogHeader>
           {qrFor && (
             <div className="space-y-3">

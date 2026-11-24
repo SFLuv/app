@@ -6,7 +6,8 @@ import { Info } from "lucide-react"
 import { AddVolunteerEventModal, type VolunteerEventDraft } from "@/components/events/add-volunteer-event-modal"
 import { VolunteerEventsManager, type ManagedVolunteerEvent } from "@/components/events/volunteer-events-manager"
 import { Button } from "@/components/ui/button"
-import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardHeader, CardTitle } from "@/components/ui/card"
+import { InfoTip } from "@/components/ui/info-tip"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { useApp } from "@/context/AppProvider"
 import { useToast } from "@/hooks/use-toast"
@@ -127,13 +128,13 @@ export default function AffiliatesPage() {
 
   if (!user?.isAffiliate) {
     return (
-      <div className="container mx-auto p-4 space-y-4">
+      <div className="container mx-auto space-y-4">
         <Card>
           <CardHeader>
-            <CardTitle>Affiliate Access Required</CardTitle>
-            <CardDescription>
-              Your account is not yet approved for volunteer events. Submit a request in settings.
-            </CardDescription>
+            <CardTitle className="flex items-center gap-2">
+              Affiliate Access Required
+              <InfoTip>Your account is not yet approved for volunteer events. Submit a request in settings.</InfoTip>
+            </CardTitle>
           </CardHeader>
         </Card>
       </div>
@@ -141,7 +142,7 @@ export default function AffiliatesPage() {
   }
 
   return (
-    <div className="container mx-auto p-4 space-y-6">
+    <div className="container mx-auto space-y-section">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <div className="flex items-center gap-2">
@@ -171,9 +172,6 @@ export default function AffiliatesPage() {
               </Tooltip>
             </TooltipProvider>
           </div>
-          <p className="text-muted-foreground">
-            Request events for your organization and manage the ones that have been approved.
-          </p>
         </div>
         <Button onClick={() => setRequestModalOpen(true)} className="w-full sm:w-auto">
           + Request Event

@@ -39,7 +39,7 @@ export function MerchantDetailsModal({ merchant, isOpen, onClose, onUpdateStatus
           <DialogTitle className="text-xl font-bold">{merchant.name}</DialogTitle>
         </DialogHeader>
 
-        <div className="grid gap-4 py-4">
+        <div className="grid gap-4">
           <div className="grid grid-cols-4 gap-4">
             <div className="col-span-4">
               <img
@@ -69,7 +69,7 @@ export function MerchantDetailsModal({ merchant, isOpen, onClose, onUpdateStatus
 
             <div className="col-span-4">
               <Separator className="my-2" />
-              <h3 className="font-medium mb-2">Contact Information</h3>
+              <h3 className="font-medium">Contact Information</h3>
             </div>
 
             <div className="col-span-2">
@@ -100,7 +100,7 @@ export function MerchantDetailsModal({ merchant, isOpen, onClose, onUpdateStatus
 
             <div className="col-span-4">
               <Separator className="my-2" />
-              <h3 className="font-medium mb-2">Address</h3>
+              <h3 className="font-medium">Address</h3>
             </div>
 
             <div className="col-span-4">
@@ -125,7 +125,7 @@ export function MerchantDetailsModal({ merchant, isOpen, onClose, onUpdateStatus
 
             <div className="col-span-4">
               <Separator className="my-2" />
-              <h3 className="font-medium mb-2">Status Management</h3>
+              <h3 className="font-medium">Status Management</h3>
             </div>
 
             <div className="col-span-4">
@@ -136,7 +136,7 @@ export function MerchantDetailsModal({ merchant, isOpen, onClose, onUpdateStatus
                 value={status || merchant.status}
                 onValueChange={(value) => handleStatusChange(value as MerchantStatus)}
               >
-                <SelectTrigger className="w-full mt-1">
+                <SelectTrigger className="w-full mt-2">
                   <SelectValue placeholder="Select status" />
                 </SelectTrigger>
                 <SelectContent>

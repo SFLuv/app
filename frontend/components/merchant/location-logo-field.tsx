@@ -7,11 +7,11 @@ import { Button } from "@/components/ui/button"
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import { InfoTip } from "@/components/ui/info-tip"
 import { Label } from "@/components/ui/label"
 import {
   Tooltip,
@@ -192,7 +192,7 @@ export function LocationLogoField({
           buttons previously sat in a flex-1 block that centred them in whatever
           space was left, so they drifted with the width of the card instead of
           lining up with anything. */}
-      <div className="flex items-center gap-4 rounded-lg border border-border/70 bg-muted/20 p-3">
+      <div className="flex items-center gap-3 rounded-lg border border-border/70 bg-muted/20 p-3">
         <div className="flex shrink-0 flex-col items-center gap-1">
           <MerchantMapPin
             name={locationName || "Your location"}
@@ -261,10 +261,14 @@ export function LocationLogoField({
           }
         }}
       >
-        <DialogContent className="sm:max-w-[420px]">
+        <DialogContent className="sm:max-w-[420px]" aria-describedby={undefined}>
           <DialogHeader>
-            <DialogTitle>Crop your logo</DialogTitle>
-            <DialogDescription>Drag to reposition, zoom to frame.</DialogDescription>
+            <DialogTitle>
+              <span className="inline-flex items-center gap-1.5">
+                Crop your logo
+                <InfoTip>Drag to reposition, zoom to frame.</InfoTip>
+              </span>
+            </DialogTitle>
           </DialogHeader>
 
           <div className="space-y-3">

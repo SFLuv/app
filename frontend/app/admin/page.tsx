@@ -10,7 +10,8 @@ import { useApp } from "@/context/AppProvider"
 import { useMerchants } from "@/hooks/api/use-merchants"
 import { useToast } from "@/hooks/use-toast"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { InfoTip } from "@/components/ui/info-tip"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -2744,11 +2745,10 @@ export default function AdminPage() {
   }
 
   return (
-    <div className="container mx-auto space-y-6 px-3 py-4 sm:p-4">
+    <div className="container mx-auto space-y-section">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold sm:text-3xl">Admin Panel</h1>
-          <p className="text-muted-foreground">Manage tokens and merchant approvals</p>
         </div>
       </div>
 
@@ -2861,8 +2861,8 @@ export default function AdminPage() {
               <CardTitle className="flex items-center gap-2">
                 <Wallet className="h-5 w-5" />
                 Select Wallet
+                <InfoTip>Choose which wallet to use for all operations</InfoTip>
               </CardTitle>
-              <CardDescription>Choose which wallet to use for all operations</CardDescription>
             </CardHeader>
             <CardContent>
               <Select value={selectedWallet ? String(selectedWallet?.id) : ""} onValueChange={(id) => {
@@ -2892,9 +2892,9 @@ export default function AdminPage() {
           </Card>
 
           {/* Balance Overview */}
-          <div className="grid gap-4 md:grid-cols-2">
+          <div className="grid gap-4 sm:gap-6 md:grid-cols-2">
             <Card>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardHeader className="flex flex-row items-center justify-between space-y-0">
                 <CardTitle className="text-sm font-medium">
                   {selectedWallet ? `${selectedWallet.name} BYUSD Balance` : "BYUSD Balance"}
                 </CardTitle>
@@ -2911,7 +2911,7 @@ export default function AdminPage() {
             </Card>
 
             <Card>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardHeader className="flex flex-row items-center justify-between space-y-0">
                 <CardTitle className="text-sm font-medium">
                   {selectedWallet ? `${selectedWallet.name} ${tokenSymbol} Balance` : `${tokenSymbol} Balance`}
                 </CardTitle>
@@ -2929,14 +2929,14 @@ export default function AdminPage() {
           </div>
 
           {/* Token Conversion Interface */}
-          <div className="grid gap-6 md:grid-cols-2">
+          <div className="grid gap-4 sm:gap-6 md:grid-cols-2">
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <ArrowUpDown className="h-5 w-5 text-green-600" />
                   Token Conversion
+                  <InfoTip>Convert between BYUSD stablecoins and {tokenSymbol} tokens</InfoTip>
                 </CardTitle>
-                <CardDescription>Convert between BYUSD stablecoins and {tokenSymbol} tokens</CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="space-y-2">
@@ -3004,8 +3004,8 @@ export default function AdminPage() {
                 <CardTitle className="flex items-center gap-2">
                   <CreditCard className="h-5 w-5 text-purple-600" />
                   PayPal Cash Conversion
+                  <InfoTip>Convert BYUSD stablecoins to cash in your PayPal account</InfoTip>
                 </CardTitle>
-                <CardDescription>Convert BYUSD stablecoins to cash in your PayPal account</CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="space-y-2">
@@ -3047,14 +3047,14 @@ export default function AdminPage() {
                           <Plus className="h-4 w-4" />
                         </Button>
                       </DialogTrigger>
-                      <DialogContent className="w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] max-h-[90vh] overflow-y-auto sm:max-w-[500px]">
+                      <DialogContent
+                        className="w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] max-h-[90vh] overflow-y-auto sm:max-w-[500px]"
+                        aria-describedby={undefined}
+                      >
                         <DialogHeader>
                           <DialogTitle>Connect PayPal Account</DialogTitle>
-                          <DialogDescription>
-                            Enter your PayPal credentials to connect your account for cash conversions.
-                          </DialogDescription>
                         </DialogHeader>
-                        <div className="grid gap-4 py-4 max-h-[60vh] overflow-y-auto">
+                        <div className="grid gap-4 max-h-[60vh] overflow-y-auto">
                           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                             <div className="space-y-2">
                               <Label htmlFor="paypal-first-name">
@@ -3162,7 +3162,7 @@ export default function AdminPage() {
                             </div>
                           </div>
                         </div>
-                        <DialogFooter className="gap-2">
+                        <DialogFooter>
                           <Button
                             className="w-full sm:w-auto"
                             variant="outline"
@@ -3272,7 +3272,7 @@ export default function AdminPage() {
                 </DialogDescription>
               </DialogHeader>
               {selectedAdminUser && (
-                <div className="space-y-5">
+                <div className="space-y-6">
                   <div className="grid gap-4 md:grid-cols-2">
                     <div className="space-y-1">
                       <p className="text-xs font-medium uppercase text-muted-foreground">Contact</p>
@@ -3369,14 +3369,14 @@ export default function AdminPage() {
           </Dialog>
 
           <Card>
-            <CardHeader className="pb-4">
+            <CardHeader>
               <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div>
                   <CardTitle className="flex items-center gap-2 text-xl">
                     <Users className="h-5 w-5" />
                     Users
+                    <InfoTip>View accounts created in SFLUV and export opted-in email contacts.</InfoTip>
                   </CardTitle>
-                  <CardDescription>View accounts created in SFLUV and export opted-in email contacts.</CardDescription>
                 </div>
                 <Button
                   variant="outline"
@@ -3429,10 +3429,10 @@ export default function AdminPage() {
                 <div className="rounded-lg border bg-muted/20 p-4">
                   <div className="mb-3 flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
                     <div>
-                      <h4 className="text-sm font-semibold">App version breakdown</h4>
-                      <p className="text-xs text-muted-foreground">
-                        Latest recorded app version across {adminUsersVersionCountsTotal} active users
-                      </p>
+                      <h4 className="flex items-center gap-1.5 text-sm font-semibold">
+                        App version breakdown
+                        <InfoTip>Latest recorded app version across {adminUsersVersionCountsTotal} active users</InfoTip>
+                      </h4>
                     </div>
                     <Badge variant="outline">{adminUsersVersionCounts.length} buckets</Badge>
                   </div>
@@ -3520,7 +3520,6 @@ export default function AdminPage() {
                 <div className="text-center py-8">
                   <Users className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
                   <h3 className="text-lg font-medium">No Users Found</h3>
-                  <p className="text-muted-foreground">No accounts are available on this page.</p>
                 </div>
               ) : (
                 <div className="overflow-x-auto rounded-lg border">
@@ -3641,13 +3640,12 @@ export default function AdminPage() {
 
         <TabsContent value="merchants" className="space-y-6">
           <Card>
-            <CardHeader className="pb-6">
+            <CardHeader className="gap-3">
               <CardTitle className="flex items-center gap-2 text-xl">
                 <Users className="h-6 w-6" />
                 Manage Merchants
               </CardTitle>
-              <CardDescription className="text-base mt-2">Review and manage merchant application status</CardDescription>
-              <div className="mt-4 flex flex-col gap-3">
+              <div className="flex flex-col gap-3">
                 <div className="relative">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                   <Input
@@ -3661,7 +3659,7 @@ export default function AdminPage() {
                   <div className="text-sm text-muted-foreground">
                     Showing {filteredMerchants.length} of {authedMapLocations.length} merchant applications
                   </div>
-                  <div className="w-full sm:w-[220px] space-y-1">
+                  <div className="w-full sm:w-[220px] space-y-2">
                     <Label className="text-xs text-muted-foreground">Filter by status</Label>
                     <Select value={merchantStatusFilter} onValueChange={setMerchantStatusFilter}>
                       <SelectTrigger>
@@ -3684,7 +3682,6 @@ export default function AdminPage() {
                 <div className="text-center py-8">
                   <Building2 className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
                   <h3 className="text-lg font-medium">No Merchant Applications</h3>
-                  <p className="text-muted-foreground">No merchants match the selected status filter.</p>
                 </div>
               ) : (
                 <div className="space-y-4">
@@ -3766,13 +3763,12 @@ export default function AdminPage() {
         <TabsContent value="w9" className="space-y-6">
           <W9RequestPanel />
           <Card>
-            <CardHeader className="pb-6">
+            <CardHeader className="gap-3">
               <CardTitle className="flex items-center gap-2 text-xl">
                 <FileCheck className="h-6 w-6" />
                 W9 Submissions Pending Approval
               </CardTitle>
-              <CardDescription className="text-base mt-2">Review and approve W9 submissions</CardDescription>
-              <div className="mt-3 flex flex-wrap items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <Badge variant="secondary" className="text-sm px-3 py-1">
                   {w9Overview?.people_with_holds ?? 0} with money held
                 </Badge>
@@ -3942,7 +3938,7 @@ export default function AdminPage() {
                     </div>
                   )}
 
-                  <div className="flex justify-end">
+                  <div className="flex justify-end pt-2">
                     <Button
                       className="w-full sm:w-auto"
                       variant="secondary"
@@ -3958,12 +3954,11 @@ export default function AdminPage() {
           </Dialog>
 
           <Card>
-            <CardHeader className="pb-4">
+            <CardHeader>
               <CardTitle className="flex items-center gap-2 text-xl">
                 <Users className="h-5 w-5" />
                 Manage Affiliates
               </CardTitle>
-              <CardDescription>Approve requests and manage affiliate balances</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="flex flex-col gap-3">
@@ -3980,7 +3975,7 @@ export default function AdminPage() {
                   <div className="text-sm text-muted-foreground">
                     Showing {filteredAffiliates.length} affiliates
                   </div>
-                  <div className="w-full sm:w-[220px] space-y-1">
+                  <div className="w-full sm:w-[220px] space-y-2">
                     <Label className="text-xs text-muted-foreground">Filter by status</Label>
                     <Select value={affiliateStatusFilter} onValueChange={setAffiliateStatusFilter}>
                       <SelectTrigger>
@@ -4000,7 +3995,6 @@ export default function AdminPage() {
                 <div className="text-center py-8">
                   <Users className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
                   <h3 className="text-lg font-medium">No Affiliates Found</h3>
-                  <p className="text-muted-foreground">No affiliates match the selected filter.</p>
                 </div>
               ) : (
                 <div className="space-y-4">
@@ -4105,7 +4099,7 @@ export default function AdminPage() {
                     </div>
                   )}
 
-                  <div className="flex justify-end">
+                  <div className="flex justify-end pt-2">
                     <Button
                       className="w-full sm:w-auto"
                       variant="secondary"
@@ -4121,12 +4115,11 @@ export default function AdminPage() {
           </Dialog>
 
           <Card>
-            <CardHeader className="pb-4">
+            <CardHeader>
               <CardTitle className="flex items-center gap-2 text-xl">
                 <Users className="h-5 w-5" />
                 Manage Proposers
               </CardTitle>
-              <CardDescription>Approve proposer requests and manage proposer access.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="flex flex-col gap-3">
@@ -4143,7 +4136,7 @@ export default function AdminPage() {
                   <div className="text-sm text-muted-foreground">
                     Showing {filteredProposers.length} proposers
                   </div>
-                  <div className="w-full sm:w-[220px] space-y-1">
+                  <div className="w-full sm:w-[220px] space-y-2">
                     <Label className="text-xs text-muted-foreground">Filter by status</Label>
                     <Select value={proposerStatusFilter} onValueChange={setProposerStatusFilter}>
                       <SelectTrigger>
@@ -4163,7 +4156,6 @@ export default function AdminPage() {
                 <div className="text-center py-8">
                   <Users className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
                   <h3 className="text-lg font-medium">No Proposers Found</h3>
-                  <p className="text-muted-foreground">No proposers match the selected filter.</p>
                 </div>
               ) : (
                 <div className="space-y-4">
@@ -4211,28 +4203,25 @@ export default function AdminPage() {
           )}
 
           <Dialog open={improverModalOpen} onOpenChange={setImproverModalOpen}>
-            <DialogContent className="w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] max-h-[90vh] overflow-y-auto sm:max-w-lg">
+            <DialogContent className="w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] max-h-[90vh] overflow-y-auto sm:max-w-lg" aria-describedby={undefined}>
               <DialogHeader>
                 <DialogTitle>Manage Improver</DialogTitle>
-                <DialogDescription>
-                  Update approval status for this improver request.
-                </DialogDescription>
               </DialogHeader>
               {selectedImprover && (
                 <div className="space-y-4">
-                  <div className="space-y-1">
+                  <div className="space-y-2">
                     <Label>Name</Label>
                     <Input value={`${selectedImprover.first_name} ${selectedImprover.last_name}`} disabled />
                   </div>
-                  <div className="space-y-1">
+                  <div className="space-y-2">
                     <Label>Email</Label>
                     <Input value={selectedImprover.email} disabled />
                   </div>
-                  <div className="space-y-1">
+                  <div className="space-y-2">
                     <Label>User ID</Label>
                     <Input value={selectedImprover.user_id} disabled className="font-mono text-xs" />
                   </div>
-                  <div className="space-y-1">
+                  <div className="space-y-2">
                     <Label>Payout Wallet</Label>
                     <Input
                       value={selectedImprover.primary_rewards_account || "No payout wallet set"}
@@ -4303,7 +4292,7 @@ export default function AdminPage() {
                       )
                     })()}
                   </div>
-                  <div className="space-y-1">
+                  <div className="space-y-2">
                     <Label>Change Approval Status</Label>
                     <Select
                       value={improverStatusDraft}
@@ -4327,7 +4316,7 @@ export default function AdminPage() {
                     </div>
                   )}
 
-                  <div className="flex justify-end">
+                  <div className="flex justify-end pt-2">
                     <Button
                       className="w-full sm:w-auto"
                       onClick={saveImproverModal}
@@ -4342,12 +4331,11 @@ export default function AdminPage() {
           </Dialog>
 
           <Card>
-            <CardHeader className="pb-4">
+            <CardHeader>
               <CardTitle className="flex items-center gap-2 text-xl">
                 <Users className="h-5 w-5" />
                 Manage Improvers
               </CardTitle>
-              <CardDescription>Approve or reject improver access requests</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
@@ -4360,7 +4348,7 @@ export default function AdminPage() {
                     className="pl-9"
                   />
                 </div>
-                <div className="w-full sm:w-[220px] space-y-1">
+                <div className="w-full sm:w-[220px] space-y-2">
                   <Label className="text-xs text-muted-foreground">Filter by status</Label>
                   <Select value={improverStatusFilter} onValueChange={setImproverStatusFilter}>
                     <SelectTrigger>
@@ -4379,7 +4367,6 @@ export default function AdminPage() {
                 <div className="text-center py-8">
                   <Users className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
                   <h3 className="text-lg font-medium">No Improvers Found</h3>
-                  <p className="text-muted-foreground">No improvers match the selected status filter.</p>
                 </div>
               ) : (
                 <div className="space-y-4">
@@ -4441,28 +4428,25 @@ export default function AdminPage() {
           )}
 
           <Dialog open={supervisorModalOpen} onOpenChange={setSupervisorModalOpen}>
-            <DialogContent className="w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] max-h-[90vh] overflow-y-auto sm:max-w-lg">
+            <DialogContent className="w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] max-h-[90vh] overflow-y-auto sm:max-w-lg" aria-describedby={undefined}>
               <DialogHeader>
                 <DialogTitle>Manage Supervisor</DialogTitle>
-                <DialogDescription>
-                  Update approval status and nickname for this supervisor request.
-                </DialogDescription>
               </DialogHeader>
               {selectedSupervisor && (
                 <div className="space-y-4">
-                  <div className="space-y-1">
+                  <div className="space-y-2">
                     <Label>Organization</Label>
                     <Input value={selectedSupervisor.organization} disabled />
                   </div>
-                  <div className="space-y-1">
+                  <div className="space-y-2">
                     <Label>Email</Label>
                     <Input value={selectedSupervisor.email} disabled />
                   </div>
-                  <div className="space-y-1">
+                  <div className="space-y-2">
                     <Label>User ID</Label>
                     <Input value={selectedSupervisor.user_id} disabled className="font-mono text-xs" />
                   </div>
-                  <div className="space-y-1">
+                  <div className="space-y-2">
                     <Label>Nickname</Label>
                     <Input
                       value={supervisorNickname}
@@ -4470,7 +4454,7 @@ export default function AdminPage() {
                       placeholder="Nickname (optional)"
                     />
                   </div>
-                  <div className="space-y-1">
+                  <div className="space-y-2">
                     <Label>Change Approval Status</Label>
                     <Select
                       value={supervisorStatusDraft}
@@ -4494,7 +4478,7 @@ export default function AdminPage() {
                     </div>
                   )}
 
-                  <div className="flex justify-end">
+                  <div className="flex justify-end pt-2">
                     <Button
                       className="w-full sm:w-auto"
                       onClick={saveSupervisorModal}
@@ -4509,12 +4493,11 @@ export default function AdminPage() {
           </Dialog>
 
           <Card>
-            <CardHeader className="pb-4">
+            <CardHeader>
               <CardTitle className="flex items-center gap-2 text-xl">
                 <Users className="h-5 w-5" />
                 Manage Supervisors
               </CardTitle>
-              <CardDescription>Approve or reject supervisor access requests</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
@@ -4527,7 +4510,7 @@ export default function AdminPage() {
                     className="pl-9"
                   />
                 </div>
-                <div className="w-full sm:w-[220px] space-y-1">
+                <div className="w-full sm:w-[220px] space-y-2">
                   <Label className="text-xs text-muted-foreground">Filter by status</Label>
                   <Select value={supervisorStatusFilter} onValueChange={setSupervisorStatusFilter}>
                     <SelectTrigger>
@@ -4546,7 +4529,6 @@ export default function AdminPage() {
                 <div className="text-center py-8">
                   <Users className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
                   <h3 className="text-lg font-medium">No Supervisors Found</h3>
-                  <p className="text-muted-foreground">No supervisors match the selected status filter.</p>
                 </div>
               ) : (
                 <div className="space-y-4">
@@ -4609,12 +4591,11 @@ export default function AdminPage() {
           )}
 
           <Card>
-            <CardHeader className="pb-4">
+            <CardHeader>
               <CardTitle className="flex items-center gap-2 text-xl">
                 <FileCheck className="h-5 w-5" />
                 Manage Workflows
               </CardTitle>
-              <CardDescription>Search workflows by title or assigned improver email, then manage series claims.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="space-y-3">
@@ -4654,7 +4635,6 @@ export default function AdminPage() {
                 <div className="text-center py-8">
                   <FileCheck className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
                   <h3 className="text-lg font-medium">No Workflows Found</h3>
-                  <p className="text-muted-foreground">No workflows match this search.</p>
                 </div>
               ) : (
                 <div className="space-y-4">
@@ -4812,28 +4792,25 @@ export default function AdminPage() {
           )}
 
           <Dialog open={issuerRequestModalOpen} onOpenChange={setIssuerRequestModalOpen}>
-            <DialogContent className="w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] max-h-[90vh] overflow-y-auto sm:max-w-lg">
+            <DialogContent className="w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] max-h-[90vh] overflow-y-auto sm:max-w-lg" aria-describedby={undefined}>
               <DialogHeader>
                 <DialogTitle>Manage Issuer</DialogTitle>
-                <DialogDescription>
-                  Update approval status, nickname, and allowed credentials.
-                </DialogDescription>
               </DialogHeader>
               {selectedIssuerRequest && (
                 <div className="space-y-4">
-                  <div className="space-y-1">
+                  <div className="space-y-2">
                     <Label>Organization</Label>
                     <Input value={selectedIssuerRequest.organization} disabled />
                   </div>
-                  <div className="space-y-1">
+                  <div className="space-y-2">
                     <Label>Email</Label>
                     <Input value={selectedIssuerRequest.email} disabled />
                   </div>
-                  <div className="space-y-1">
+                  <div className="space-y-2">
                     <Label>User ID</Label>
                     <Input value={selectedIssuerRequest.user_id} disabled className="font-mono text-xs" />
                   </div>
-                  <div className="space-y-1">
+                  <div className="space-y-2">
                     <Label>Nickname</Label>
                     <Input
                       value={issuerRequestNickname}
@@ -4841,7 +4818,7 @@ export default function AdminPage() {
                       placeholder="Nickname (optional)"
                     />
                   </div>
-                  <div className="space-y-1">
+                  <div className="space-y-2">
                     <Label>Change Approval Status</Label>
                     <Select value={issuerRequestStatusDraft} onValueChange={setIssuerRequestStatusDraft}>
                       <SelectTrigger>
@@ -4858,7 +4835,10 @@ export default function AdminPage() {
                   <div className="space-y-2">
                     <Label>Allowed Credentials</Label>
                     {credentialTypes.length === 0 ? (
-                      <p className="text-sm text-muted-foreground">No credential types defined. Add types in the Credential Types tab.</p>
+                      <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
+                        No credential types defined.
+                        <InfoTip>Add types in the Credential Types tab.</InfoTip>
+                      </p>
                     ) : (
                       <>
                         <Select value={issuerScopePicker} onValueChange={(value) => addIssuerScope(value)}>
@@ -4909,7 +4889,7 @@ export default function AdminPage() {
                     </div>
                   )}
 
-                  <div className="flex justify-end">
+                  <div className="flex justify-end pt-2">
                     <Button
                       className="w-full sm:w-auto"
                       onClick={saveIssuerRequestModal}
@@ -4924,12 +4904,11 @@ export default function AdminPage() {
           </Dialog>
 
           <Card>
-            <CardHeader className="pb-4">
+            <CardHeader>
               <CardTitle className="flex items-center gap-2 text-xl">
                 <Users className="h-5 w-5" />
                 Manage Issuers
               </CardTitle>
-              <CardDescription>Approve requests and manage issuer credential scopes.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
@@ -4942,7 +4921,7 @@ export default function AdminPage() {
                     className="pl-9"
                   />
                 </div>
-                <div className="w-full sm:w-[220px] space-y-1">
+                <div className="w-full sm:w-[220px] space-y-2">
                   <Label className="text-xs text-muted-foreground">Filter by status</Label>
                   <Select value={issuerStatusFilter} onValueChange={setIssuerStatusFilter}>
                     <SelectTrigger>
@@ -4962,7 +4941,6 @@ export default function AdminPage() {
                 <div className="py-8 text-center">
                   <Users className="mx-auto mb-4 h-12 w-12 text-muted-foreground" />
                   <h3 className="text-lg font-medium">No Issuer Requests</h3>
-                  <p className="text-muted-foreground">No issuers match the selected status filter.</p>
                 </div>
               ) : (
                 <div className="space-y-4">
@@ -5019,18 +4997,18 @@ export default function AdminPage() {
           )}
 
           <Card>
-            <CardHeader className="pb-4">
+            <CardHeader>
               <CardTitle className="flex items-center gap-2 text-xl">
                 <FileCheck className="h-5 w-5" />
                 Credential Types
+                <InfoTip>Define the credential types that issuers can grant to users.</InfoTip>
               </CardTitle>
-              <CardDescription>Define the credential types that issuers can grant to users.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
               <form onSubmit={createCredentialType} className="space-y-3">
                 <p className="text-sm font-medium">Add New Credential Type</p>
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                  <div className="space-y-1">
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                  <div className="space-y-2">
                     <Label htmlFor="cred-value" className="text-xs">Value (slug)</Label>
                     <Input
                       id="cred-value"
@@ -5040,7 +5018,7 @@ export default function AdminPage() {
                       className="font-mono text-sm"
                     />
                   </div>
-                  <div className="space-y-1">
+                  <div className="space-y-2">
                     <Label htmlFor="cred-label" className="text-xs">Display Label</Label>
                     <Input
                       id="cred-label"
@@ -5049,7 +5027,7 @@ export default function AdminPage() {
                       placeholder="e.g. DPW Certified"
                     />
                   </div>
-                  <div className="space-y-1">
+                  <div className="space-y-2">
                     <Label htmlFor="cred-visibility" className="text-xs">Visibility</Label>
                     <Select
                       value={newCredentialVisibility}
@@ -5067,7 +5045,7 @@ export default function AdminPage() {
                       </SelectContent>
                     </Select>
                   </div>
-                  <div className="space-y-1">
+                  <div className="space-y-2">
                     <Label htmlFor="cred-parent" className="text-xs">List under (optional)</Label>
                     <Select
                       value={newCredentialParent || "__top"}
@@ -5091,7 +5069,7 @@ export default function AdminPage() {
                   {credentialVisibilityOptions.find((option) => option.value === newCredentialVisibility)?.description}
                 </p>
                 <p className="text-xs text-muted-foreground">Note: Deleting a credential type does not revoke existing grants.</p>
-                <div className="flex justify-end">
+                <div className="flex justify-end pt-3">
                   <Button className="w-full sm:w-auto" type="submit" disabled={credentialTypeSaving || !newCredentialValue || !newCredentialLabel}>
                     {credentialTypeSaving ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Adding...</> : <><Plus className="mr-2 h-4 w-4" />Add Type</>}
                   </Button>
@@ -5222,15 +5200,14 @@ export default function AdminPage() {
               closeCredentialTypeModal()
             }}
           >
-            <DialogContent className="w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] max-h-[90vh] overflow-y-auto sm:max-w-lg">
+            <DialogContent className="w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] max-h-[90vh] overflow-y-auto sm:max-w-lg" aria-describedby={undefined}>
               <DialogHeader>
                 <DialogTitle>Credential Type Details</DialogTitle>
-                <DialogDescription>View and edit credential title, slug, visibility, and badge image.</DialogDescription>
               </DialogHeader>
 
               {selectedCredentialType && (
                 <div className="space-y-4">
-                  <div className="space-y-1">
+                  <div className="space-y-2">
                     <Label htmlFor="credential-type-title">Credential Title</Label>
                     <Input
                       id="credential-type-title"
@@ -5240,7 +5217,7 @@ export default function AdminPage() {
                     />
                   </div>
 
-                  <div className="space-y-1">
+                  <div className="space-y-2">
                     <Label htmlFor="credential-type-slug">Credential Slug</Label>
                     <div className="flex gap-2">
                       <Input
@@ -5261,7 +5238,7 @@ export default function AdminPage() {
                     </div>
                   </div>
 
-                  <div className="space-y-1">
+                  <div className="space-y-2">
                     <Label htmlFor="credential-type-visibility">Visibility</Label>
                     <Select
                       value={credentialTypeDraftVisibility}
@@ -5283,7 +5260,7 @@ export default function AdminPage() {
                     </p>
                   </div>
 
-                  <div className="space-y-1">
+                  <div className="space-y-2">
                     <Label htmlFor="credential-type-parent">List under (optional)</Label>
                     <Select
                       value={credentialTypeDraftParent || "__top"}
@@ -5348,7 +5325,7 @@ export default function AdminPage() {
                     </div>
                   )}
 
-                  <DialogFooter className="flex-col-reverse gap-2 sm:flex-row sm:justify-between">
+                  <DialogFooter className="flex-col-reverse sm:flex-row sm:justify-between">
                     <Button
                       type="button"
                       variant="outline"
@@ -5446,11 +5423,8 @@ export default function AdminPage() {
                 <QrCode className="h-5 w-5" />
                 Generate Event QR Codes
               </CardTitle>
-              <CardDescription>
-                Create QR codes for volunteer events that can be redeemed for SFLuv tokens
-              </CardDescription>
             </CardHeader>
-            <CardContent className="space-y-6">
+            <CardContent className="space-y-8">
               {/* Event Information */}
               <div className="space-y-4">
                 <h3 className="text-lg font-semibold">Event Information</h3>
@@ -5679,20 +5653,24 @@ export default function AdminPage() {
 
       {/* Location Review Modal */}
       <Dialog open={isLocationReviewModalOpen} onOpenChange={setisLocationReviewModalOpen}>
-        <DialogContent className="w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] max-h-[90vh] overflow-y-auto p-4 sm:max-w-[900px] sm:p-6">
+        <DialogContent
+          className="w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] max-h-[90vh] overflow-y-auto sm:max-w-[900px]"
+          aria-describedby={undefined}
+        >
           <DialogHeader>
             <DialogTitle className="text-lg font-bold sm:text-xl">
               Manage Merchant - {selectedLocationForReview?.name}
             </DialogTitle>
-            <DialogDescription>Review merchant details and update approval status.</DialogDescription>
           </DialogHeader>
 
           {selectedLocationForReview && (
-            <div className="space-y-6 py-4">
+            <div className="space-y-8">
               <div className="flex flex-col gap-2 rounded-lg border p-3 sm:flex-row sm:items-center sm:justify-between">
                 <div className="text-sm">
-                  <p className="font-medium">Listing details</p>
-                  <p className="text-muted-foreground">Name, type, address, hours and contact details.</p>
+                  <p className="flex items-center gap-1.5 font-medium">
+                    Listing details
+                    <InfoTip>Name, type, address, hours and contact details.</InfoTip>
+                  </p>
                 </div>
                 <Button
                   variant="outline"
@@ -5739,7 +5717,7 @@ export default function AdminPage() {
               )}
 
               {/* Business Information Section */}
-              <div className="space-y-4">
+              <div className="space-y-3">
                 <h3 className="text-lg font-semibold text-foreground border-b pb-2">Business Information</h3>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -5768,7 +5746,7 @@ export default function AdminPage() {
               </div>
 
               {/* Contact Information Section */}
-              <div className="space-y-4">
+              <div className="space-y-3">
                 <h3 className="text-lg font-semibold text-foreground border-b pb-2">Contact Information</h3>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -5826,7 +5804,7 @@ export default function AdminPage() {
                   "Accepts tips" is not only a note. It decides whether approving
                   this location mints it a tipping wallet, so it is spelled out
                   rather than shown as a bare yes/no. */}
-              <div className="space-y-4">
+              <div className="space-y-3">
                 <h3 className="text-lg font-semibold text-foreground border-b pb-2">Payment System</h3>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -5864,7 +5842,7 @@ export default function AdminPage() {
               </div>
 
               {/* Business Address Section */}
-              <div className="space-y-4">
+              <div className="space-y-3">
                 <h3 className="text-lg font-semibold text-foreground border-b pb-2">Business Address</h3>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -5893,7 +5871,7 @@ export default function AdminPage() {
 
               {/* Merchant Payment QR Section */}
               {merchantOwnerLocations.some((location) => (location.pay_to_address || "").trim()) && (
-                <div className="space-y-4">
+                <div className="space-y-3">
                   <h3 className="text-lg font-semibold text-foreground border-b pb-2">Payment QR Codes</h3>
                   <div className="space-y-3">
                     {merchantOwnerLocations
@@ -5926,7 +5904,7 @@ export default function AdminPage() {
                                 </button>
                               </CollapsibleTrigger>
                               <CollapsibleContent>
-                                <CardContent className="border-t bg-gradient-to-b from-primary/5 via-background to-background p-4 sm:p-6">
+                                <CardContent className="border-t bg-gradient-to-b from-primary/5 via-background to-background p-card">
                                   <div className="text-center space-y-3 sm:space-y-4">
                                     <SfluvQRCode
                                       ref={(node) => {
@@ -6047,7 +6025,7 @@ export default function AdminPage() {
             </div>
           )}
 
-          <DialogFooter className="gap-2">
+          <DialogFooter>
             <Button className="w-full sm:w-auto" variant="outline" onClick={() => setisLocationReviewModalOpen(false)}>
               Close
             </Button>
@@ -6063,12 +6041,9 @@ export default function AdminPage() {
       </Dialog>
 
       <Dialog open={adminRevokeModalOpen} onOpenChange={setAdminRevokeModalOpen}>
-        <DialogContent className="w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] max-h-[90vh] overflow-y-auto sm:max-w-lg">
+        <DialogContent className="w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] max-h-[90vh] overflow-y-auto sm:max-w-lg" aria-describedby={undefined}>
           <DialogHeader>
             <DialogTitle>Revoke Improver Claim</DialogTitle>
-            <DialogDescription>
-              Select an improver claim to revoke for this workflow series.
-            </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             {adminRevokeLoading ? (
@@ -6103,7 +6078,7 @@ export default function AdminPage() {
               </div>
             )}
 
-            <div className="flex justify-end">
+            <div className="flex justify-end pt-2">
               <Button
                 className="w-full sm:w-auto"
                 variant="destructive"

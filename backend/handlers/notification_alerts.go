@@ -72,12 +72,13 @@ func (a *AppService) postRoleRequestAlert(ctx context.Context, alert roleRequest
 	fields := append([]structs.NotificationField{{Label: "Who", Value: label}}, alert.Fields...)
 
 	if err := a.notifications.Post(ctx, Alert{
-		Topic:  structs.NotificationTopicForRole(alert.Role),
-		Key:    fmt.Sprintf("role:%s:%s", alert.Role, alert.Subject),
-		Kind:   structs.InternalKindRoleRequest,
-		Title:  title,
-		Body:   fmt.Sprintf("%s is waiting on a decision.", label),
-		Fields: fields,
+		Topic:    structs.NotificationTopicForRole(alert.Role),
+		Key:      fmt.Sprintf("role:%s:%s", alert.Role, alert.Subject),
+		Kind:     structs.InternalKindRoleRequest,
+		Title:    title,
+		Subtitle: label,
+		Body:     fmt.Sprintf("%s is waiting on a decision.", label),
+		Fields:   fields,
 		Payload: map[string]string{
 			"role":    alert.Role,
 			"subject": alert.Subject,

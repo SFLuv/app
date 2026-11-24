@@ -1,7 +1,8 @@
 "use client"
 
 import { useCallback, useEffect, useRef, useState } from "react"
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { InfoTip } from "@/components/ui/info-tip"
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
 
@@ -126,10 +127,14 @@ export function LogoCropModal({ open, onOpenChange, src, onCropped }: LogoCropMo
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[380px]">
+      <DialogContent className="sm:max-w-[380px]" aria-describedby={undefined}>
         <DialogHeader>
-          <DialogTitle>Crop logo</DialogTitle>
-          <DialogDescription>Organization logos must be square. Drag to position and zoom to fit.</DialogDescription>
+          <DialogTitle>
+            <span className="inline-flex items-center gap-1.5">
+              Crop logo
+              <InfoTip>Organization logos must be square. Drag to position and zoom to fit.</InfoTip>
+            </span>
+          </DialogTitle>
         </DialogHeader>
 
         <div className="flex flex-col items-center gap-4">
@@ -142,7 +147,7 @@ export function LogoCropModal({ open, onOpenChange, src, onCropped }: LogoCropMo
             onPointerMove={onPointerMove}
             onPointerUp={onPointerUp}
           />
-          <div className="w-full space-y-1">
+          <div className="w-full space-y-2">
             <Label htmlFor="logo-zoom" className="text-xs text-muted-foreground">Zoom</Label>
             <input
               id="logo-zoom"

@@ -5,6 +5,7 @@ import { useApp } from "@/context/AppProvider"
 import { keepStable } from "@/lib/keep-stable"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { InfoTip } from "@/components/ui/info-tip"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -325,11 +326,11 @@ export default function SupervisorPage() {
 
     return (
       <Card>
-        <CardHeader className="pb-2">
-          <CardTitle className="text-sm">Supervisor Data Fields</CardTitle>
-          <CardDescription className="text-xs">
-            Workflow metadata tags included in supervisor exports.
-          </CardDescription>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-sm">
+            Supervisor Data Fields
+            <InfoTip>Workflow metadata tags included in supervisor exports.</InfoTip>
+          </CardTitle>
         </CardHeader>
         <CardContent className="space-y-2">
           {fields.map((field, index) => (
@@ -412,20 +413,17 @@ export default function SupervisorPage() {
       <Card>
         <CardHeader>
           <CardTitle>Supervisor Panel</CardTitle>
-          <CardDescription>
-            Review workflow submissions, filter by timeframe, and export CSV + photos.
-          </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
-            <div className="space-y-1">
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+            <div className="space-y-2">
               <Label>Search Title</Label>
               <div className="relative">
                 <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                 <Input value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9" placeholder="Workflow title" />
               </div>
             </div>
-            <div className="space-y-1">
+            <div className="space-y-2">
               <Label>Status</Label>
               <Select value={statusFilter} onValueChange={setStatusFilter}>
                 <SelectTrigger><SelectValue placeholder="All statuses" /></SelectTrigger>
@@ -446,7 +444,7 @@ export default function SupervisorPage() {
               </Select>
             </div>
             {isAdmin ? (
-              <div className="space-y-1">
+              <div className="space-y-2">
                 <Label>Supervisor</Label>
                 <Select value={supervisorFilter} onValueChange={setSupervisorFilter}>
                   <SelectTrigger><SelectValue placeholder="All supervisors" /></SelectTrigger>
@@ -462,7 +460,7 @@ export default function SupervisorPage() {
                 </Select>
               </div>
             ) : null}
-            <div className="space-y-1">
+            <div className="space-y-2">
               <Label>Sort By</Label>
               <Select value={sortBy} onValueChange={(value) => setSortBy(value as DateField)}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
@@ -473,7 +471,7 @@ export default function SupervisorPage() {
                 </SelectContent>
               </Select>
             </div>
-            <div className="space-y-1">
+            <div className="space-y-2">
               <Label>Sort Direction</Label>
               <Select value={sortDirection} onValueChange={(value) => setSortDirection(value as "asc" | "desc")}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
@@ -485,8 +483,8 @@ export default function SupervisorPage() {
             </div>
           </div>
 
-          <div className="grid gap-3 md:grid-cols-3">
-            <div className="space-y-1">
+          <div className="grid gap-4 md:grid-cols-3">
+            <div className="space-y-2">
               <Label>Date Field</Label>
               <Select value={dateField} onValueChange={(value) => setDateField(value as DateField)}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
@@ -497,11 +495,11 @@ export default function SupervisorPage() {
                 </SelectContent>
               </Select>
             </div>
-            <div className="space-y-1">
+            <div className="space-y-2">
               <Label>Date From</Label>
               <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
             </div>
-            <div className="space-y-1">
+            <div className="space-y-2">
               <Label>Date To</Label>
               <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
             </div>

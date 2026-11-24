@@ -111,12 +111,15 @@ type InternalNotificationDetail struct {
 	Set      string `json:"set"`
 	SetLabel string `json:"set_label"`
 	// Topic is what it is about, the unit teams are routed by.
-	Topic      string              `json:"topic,omitempty"`
-	TopicLabel string              `json:"topic_label,omitempty"`
-	AlertKey   string              `json:"alert_key"`
-	Fields     []NotificationField `json:"fields,omitempty"`
-	Urgent     bool                `json:"urgent"`
-	UpdatedAt  time.Time           `json:"updated_at"`
+	Topic      string `json:"topic,omitempty"`
+	TopicLabel string `json:"topic_label,omitempty"`
+	// Subtitle is who or what it is about, the one line the list shows under
+	// the topic. The title, body and fields are for the detail view.
+	Subtitle  string              `json:"subtitle,omitempty"`
+	AlertKey  string              `json:"alert_key"`
+	Fields    []NotificationField `json:"fields,omitempty"`
+	Urgent    bool                `json:"urgent"`
+	UpdatedAt time.Time           `json:"updated_at"`
 	// Actions is empty for an alert that retires itself, which is the honest
 	// representation: there is nothing a person can do about a low balance
 	// from a phone except put money in the account.

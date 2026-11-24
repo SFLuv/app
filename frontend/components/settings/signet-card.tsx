@@ -4,12 +4,13 @@ import { useState } from "react"
 import { Loader2, ShieldCheck } from "lucide-react"
 
 import {
-  Card, CardContent, CardDescription, CardHeader, CardTitle,
+  Card, CardContent, CardHeader, CardTitle,
 } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog"
+import { InfoTip } from "@/components/ui/info-tip"
 import { Switch } from "@/components/ui/switch"
 import { useSignetEnrolment } from "@/hooks/useSignetEnrolment"
 import type { AppWallet } from "@/lib/wallets/wallets"
@@ -62,12 +63,12 @@ export function SignetCard({ wallet }: { wallet: AppWallet | null | undefined })
           <span className="rounded-full border border-[#eb6c6c]/40 bg-[#eb6c6c]/10 px-2 py-0.5 text-[11px] font-medium text-[#eb6c6c]">
             Trial
           </span>
+          <InfoTip>
+            Sign transactions from your primary wallet with a threshold key held
+            across several independent servers, instead of the key in this browser.
+            You still sign in exactly as you do now.
+          </InfoTip>
         </CardTitle>
-        <CardDescription>
-          Sign transactions from your primary wallet with a threshold key held
-          across several independent servers, instead of the key in this browser.
-          You still sign in exactly as you do now.
-        </CardDescription>
       </CardHeader>
 
       <CardContent className="space-y-4">
@@ -82,7 +83,6 @@ export function SignetCard({ wallet }: { wallet: AppWallet | null | undefined })
           <Button
             variant="outline"
             onClick={() => setConfirmOpen(true)}
-            className="mt-3"
           >
             Move link to this wallet
           </Button>
@@ -155,13 +155,13 @@ export function SignetCard({ wallet }: { wallet: AppWallet | null | undefined })
         ) : (
           <div className="flex items-center justify-between gap-3">
             <div>
-              <p className="text-sm font-medium text-black dark:text-white">
+              <p className="flex items-center gap-2 text-sm font-medium text-black dark:text-white">
                 Use Signet to sign
-              </p>
-              <p className="text-xs text-muted-foreground">
-                {preferSignet
-                  ? "You will be asked to sign in once the next time you send something."
-                  : "Turn this off at any time to go back to signing in this browser."}
+                <InfoTip>
+                  {preferSignet
+                    ? "You will be asked to sign in once the next time you send something."
+                    : "Turn this off at any time to go back to signing in this browser."}
+                </InfoTip>
               </p>
             </div>
             <Switch checked={preferSignet} onCheckedChange={setPreferSignet} />

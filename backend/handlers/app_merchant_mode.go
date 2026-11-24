@@ -232,11 +232,12 @@ func (a *AppService) RequestMerchantModePINHelp(w http.ResponseWriter, r *http.R
 		return
 	}
 	if err := a.notifications.Post(r.Context(), Alert{
-		Topic: structs.NotificationTopicPinHelp,
-		Key:   "pin_help:" + *userDid,
-		Kind:  structs.InternalKindNotice,
-		Title: "Merchant PIN help: " + who,
-		Body:  "A merchant is locked out of merchant mode and needs their PIN reset. Reset it in the admin panel's merchant PIN tools.",
+		Topic:    structs.NotificationTopicPinHelp,
+		Key:      "pin_help:" + *userDid,
+		Kind:     structs.InternalKindNotice,
+		Title:    "Merchant PIN help: " + who,
+		Subtitle: who,
+		Body:     "A merchant is locked out of merchant mode and needs their PIN reset. Reset it in the admin panel's merchant PIN tools.",
 		Fields: []structs.NotificationField{
 			{Label: "Merchant", Value: who},
 			{Label: "Contact email", Value: contactEmail},

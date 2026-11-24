@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useMemo, useRef, useState } from "react"
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -130,12 +130,9 @@ export function AddEventModal({ open, onOpenChange, handleAddEvent, addEventErro
     <Dialog open={open} onOpenChange={(open) => {
       onOpenChange(open)
     }}>
-      <DialogContent className="w-[95vw] max-w-md mx-auto max-h-[90vh] rounded-lg overflow-y-auto">
-        <DialogHeader className="space-y-2 pb-2">
+      <DialogContent className="w-[95vw] max-w-md mx-auto max-h-[90vh] rounded-lg overflow-y-auto" aria-describedby={undefined}>
+        <DialogHeader>
           <DialogTitle className="text-lg sm:text-xl">New Event</DialogTitle>
-          <DialogDescription className="text-sm">
-            Create a volunteer event with SFLuv Rewards.
-          </DialogDescription>
         </DialogHeader>
         {isSubmitting ?
           <div className="min-h-64 flex items-center justify-center">

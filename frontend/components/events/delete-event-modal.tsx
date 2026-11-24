@@ -43,7 +43,7 @@ export function DeleteEventModal({ open, onOpenChange, event, handleDeleteEvent,
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="w-[95vw] max-w-md mx-auto max-h-[90vh] rounded-lg overflow-y-auto">
-        <DialogHeader className="space-y-2 pb-2">
+        <DialogHeader>
           <DialogTitle className="text-lg sm:text-xl">Delete Event</DialogTitle>
           <DialogDescription className="text-sm">
             Are you sure you want to delete {event.title}?

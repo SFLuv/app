@@ -238,7 +238,7 @@ export default function LocationsPage() {
   // the form the merchant just left.
   if (sortedLocations.length === 0) {
     return (
-      <div className="mx-auto w-full max-w-2xl px-3 pb-6 pt-2 sm:px-6">
+      <div className="mx-auto w-full max-w-2xl">
         <h1 className="text-2xl font-bold text-black dark:text-white sm:text-3xl">Locations</h1>
         <Card className="mt-6 border-border/70">
           <CardContent className="space-y-5 p-6 text-center sm:p-8">
@@ -286,8 +286,8 @@ export default function LocationsPage() {
   if (applying) {
     if (googleLoadError) {
       return (
-        <Card className="mx-auto mt-6 max-w-2xl border-[#eb6c6c]/40 bg-[#eb6c6c]/5">
-          <CardContent className="p-6 text-sm text-[#8f2e2e]">{googleLoadError}</CardContent>
+        <Card className="mx-auto max-w-2xl border-[#eb6c6c]/40 bg-[#eb6c6c]/5">
+          <CardContent className="pt-card text-sm text-[#8f2e2e]">{googleLoadError}</CardContent>
         </Card>
       )
     }
@@ -323,7 +323,7 @@ export default function LocationsPage() {
   }
 
   return (
-    <div className="mx-auto w-full max-w-2xl space-y-4 px-3 pb-6 pt-2 sm:space-y-6 sm:px-6">
+    <div className="mx-auto w-full max-w-2xl space-y-4 sm:space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h1 className="text-2xl font-bold text-black dark:text-white sm:text-3xl">Locations</h1>

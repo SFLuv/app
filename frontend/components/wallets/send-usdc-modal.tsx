@@ -2,7 +2,8 @@
 
 import { useMemo, useState } from "react"
 import { Address, isAddress, getAddress, parseUnits } from "viem"
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { InfoTip } from "@/components/ui/info-tip"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -88,10 +89,14 @@ export function SendUsdcModal({ open, onOpenChange, wallet, balance, decimals, o
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className="sm:max-w-[460px]">
+      <DialogContent className="sm:max-w-[460px]" aria-describedby={undefined}>
         <DialogHeader>
-          <DialogTitle className={USDC.accentText}>Send {USDC_SYMBOL}</DialogTitle>
-          <DialogDescription>Transfer USDC on Celo to another address.</DialogDescription>
+          <DialogTitle className={USDC.accentText}>
+            <span className="inline-flex items-center gap-1.5">
+              Send {USDC_SYMBOL}
+              <InfoTip>Transfer USDC on Celo to another address.</InfoTip>
+            </span>
+          </DialogTitle>
         </DialogHeader>
 
         <div className="space-y-4">

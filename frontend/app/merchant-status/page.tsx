@@ -19,7 +19,7 @@ export default function MerchantStatusPage() {
   const isMerchantAccount = user?.accountType === "merchant"
 
   return (
-    <div className="mx-auto w-full max-w-3xl space-y-5 px-3 pb-6 pt-2 sm:space-y-6 sm:px-0">
+    <div className="mx-auto w-full max-w-3xl space-y-4 sm:space-y-6">
       <div className="space-y-1">
         <h1 className="text-2xl font-bold text-black dark:text-white sm:text-3xl">Merchant Status</h1>
       </div>
@@ -32,10 +32,10 @@ export default function MerchantStatusPage() {
 
       {status !== "loading" && sortedUserLocations.length === 0 && (
         <Card className="overflow-hidden border-border/80 bg-card/85 shadow-sm">
-          <CardHeader className="px-4 pb-3 pt-5 sm:px-6">
+          <CardHeader>
             <CardTitle className="text-black dark:text-white">Application Status</CardTitle>
           </CardHeader>
-          <CardContent className="px-4 pb-6 pt-2 sm:px-6">
+          <CardContent>
             {/* Merchant is chosen at signup now, so there is no application to
                 offer a regular account — only a merchant who has not listed a
                 shop yet has anywhere to be sent. */}
@@ -60,7 +60,7 @@ export default function MerchantStatusPage() {
       {/* Applying for a further location belongs on Locations, next to the till
           it will be paid into, rather than being a second door here. */}
       {status !== "loading" && sortedUserLocations.length > 0 && (
-        <div className="space-y-4 sm:space-y-5">
+        <div className="space-y-4 sm:space-y-6">
           {sortedUserLocations.map((location) => (
             <LocationApplicationStatusCard key={location.id} location={location}>
               {/* Renders itself only while the application is still pending, so

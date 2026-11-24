@@ -203,14 +203,14 @@ export function MapView({
         </button>
       </div>
 
-      <Card className="mt-2 overflow-hidden rounded-2xl border shadow-sm">
-        <CardContent className="overflow-hidden rounded-2xl p-2 sm:p-2.5">
+      <Card className="overflow-hidden rounded-2xl border shadow-sm">
+        <CardContent className="overflow-hidden rounded-2xl p-2">
           {/*
             Desktop splits the card: the map takes roughly two thirds and the
             merchant list the rest. Below md the list would leave the map too
             narrow to be a map, so it drops away and the map takes the width.
           */}
-          <div className={`${mapHeightClass} flex max-h-[560px] min-h-[280px] w-full gap-2.5 sm:min-h-[340px]`}>
+          <div className={`${mapHeightClass} flex max-h-[560px] min-h-[280px] w-full gap-2 sm:min-h-[340px]`}>
             <div
               className={cn(
                 "h-full min-w-0 flex-1 overflow-hidden rounded-xl bg-muted/30",

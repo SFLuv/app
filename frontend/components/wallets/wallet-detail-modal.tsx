@@ -177,11 +177,11 @@ export function WalletDetailModal({ wallet, isOpen, onClose, onDisconnect }: Wal
             <div className="space-y-6">
               <div className="space-y-4">
                 {/* QR Code Section */}
-                <div className="mt-6">
+                <div>
                   <h4 className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-2">Wallet QR Code</h4>
 
                   <Tabs defaultValue="citizen" value={qrCodeTab} onValueChange={handleQrCodeTabChange}>
-                    <TabsList className="grid grid-cols-2 mb-4 bg-secondary">
+                    <TabsList className="grid grid-cols-2 mb-2 bg-secondary">
                       <TabsTrigger value="citizen" className="text-black dark:text-white">
                         Citizen Wallet
                       </TabsTrigger>
@@ -302,7 +302,7 @@ export function WalletDetailModal({ wallet, isOpen, onClose, onDisconnect }: Wal
               </div>
             </div>
 
-            <DialogFooter className="flex flex-col sm:flex-row gap-2 mt-6">
+            <DialogFooter className="flex flex-col sm:flex-row gap-2">
               <Button
                 variant="outline"
                 className="text-red-500 border-red-500 hover:bg-red-500 hover:text-white bg-transparent"
@@ -336,7 +336,6 @@ export function WalletDetailModal({ wallet, isOpen, onClose, onDisconnect }: Wal
             <DialogHeader>
               <DialogTitle>Loading wallet details...</DialogTitle>
             </DialogHeader>
-            <p className="text-gray-500 dark:text-gray-400">Please wait while we load your wallet information.</p>
           </div>
         )}
       </DialogContent>

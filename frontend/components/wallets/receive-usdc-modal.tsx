@@ -2,7 +2,8 @@
 
 import { useRef, useState } from "react"
 import { SfluvQRCode, type SfluvQRCodeHandle } from "@/components/ui/sfluv-qr-code"
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { InfoTip } from "@/components/ui/info-tip"
 import { Button } from "@/components/ui/button"
 import { Copy, Check, Download } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
@@ -36,12 +37,14 @@ export function ReceiveUsdcModal({ open, onOpenChange, wallet }: ReceiveUsdcModa
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[420px]">
+      <DialogContent className="sm:max-w-[420px]" aria-describedby={undefined}>
         <DialogHeader>
-          <DialogTitle className={USDC.accentText}>Receive {USDC_SYMBOL}</DialogTitle>
-          <DialogDescription>
-            Send USDC on Celo to this address. It shares the same address as your SFLUV wallet.
-          </DialogDescription>
+          <DialogTitle className={USDC.accentText}>
+            <span className="inline-flex items-center gap-1.5">
+              Receive {USDC_SYMBOL}
+              <InfoTip>Send USDC on Celo to this address. It shares the same address as your SFLUV wallet.</InfoTip>
+            </span>
+          </DialogTitle>
         </DialogHeader>
 
         <div className="flex flex-col items-center gap-4">

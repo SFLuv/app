@@ -21,7 +21,7 @@ export function PolicyPageShell({
 
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(235,108,108,0.16),_transparent_40%),linear-gradient(180deg,_hsl(var(--background))_0%,_hsl(var(--background))_100%)]">
-      <div className="mx-auto max-w-4xl px-4 py-8 sm:px-6 sm:py-10">
+      <div className="mx-auto max-w-4xl px-gutter py-8 sm:py-10">
         <div className="rounded-3xl border border-border/70 bg-card/95 p-6 shadow-[0_1px_3px_hsl(var(--foreground)/0.08),0_24px_60px_hsl(var(--foreground)/0.16)] sm:p-10">
           <div className="space-y-3 border-b border-border/70 pb-6">
             <p className="text-sm font-semibold uppercase tracking-[0.24em] text-[#eb6c6c]">

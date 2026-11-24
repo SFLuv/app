@@ -57,7 +57,7 @@ export function TransactionAnalytics({ analytics }: TransactionAnalyticsProps) {
     <div className="space-y-6">
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
         <Card>
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
+          <CardHeader className="flex flex-row items-center justify-between">
             <CardTitle className="text-sm font-medium text-black dark:text-white">Total Income</CardTitle>
             <DollarSign className="h-4 w-4 text-green-500" />
           </CardHeader>
@@ -65,21 +65,19 @@ export function TransactionAnalytics({ analytics }: TransactionAnalyticsProps) {
             <div className="text-2xl font-bold text-black dark:text-white">
               {formatCurrency(analytics.totalIncome)} SFLuv
             </div>
-            <p className="text-xs text-gray-500 dark:text-gray-400">Lifetime earnings</p>
           </CardContent>
         </Card>
         <Card>
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
+          <CardHeader className="flex flex-row items-center justify-between">
             <CardTitle className="text-sm font-medium text-black dark:text-white">Total Transactions</CardTitle>
             <BarChart3 className="h-4 w-4 text-blue-500" />
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-black dark:text-white">{analytics.totalTransactions}</div>
-            <p className="text-xs text-gray-500 dark:text-gray-400">All time</p>
           </CardContent>
         </Card>
         <Card>
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
+          <CardHeader className="flex flex-row items-center justify-between">
             <CardTitle className="text-sm font-medium text-black dark:text-white">Average Transaction</CardTitle>
             <TrendingUp className="h-4 w-4 text-purple-500" />
           </CardHeader>
@@ -87,7 +85,6 @@ export function TransactionAnalytics({ analytics }: TransactionAnalyticsProps) {
             <div className="text-2xl font-bold text-black dark:text-white">
               {formatCurrency(analytics.averageTransaction)} SFLuv
             </div>
-            <p className="text-xs text-gray-500 dark:text-gray-400">Per transaction</p>
           </CardContent>
         </Card>
       </div>

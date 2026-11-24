@@ -13,7 +13,6 @@ import { formatWorkflowDisplayStatus } from "@/lib/workflow-status"
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
@@ -265,7 +264,7 @@ export function WorkflowDetailsModal({
                 key={item.id}
                 className={cn(hasSubmission && "border-border/70 bg-background/90 shadow-none")}
               >
-                <CardContent className="pt-3 space-y-3">
+                <CardContent className="p-4 space-y-3">
                   <div className="flex flex-wrap items-center gap-2">
                     <p className="text-sm font-medium">
                       Item {item.item_order}: {item.title}
@@ -366,7 +365,7 @@ export function WorkflowDetailsModal({
                                     return (
                                       <div
                                         key={`${photoId}-${photoIndex}`}
-                                        className="space-y-2 rounded-lg border border-border/70 bg-secondary/10 p-2.5"
+                                        className="space-y-2 rounded-lg border border-border/70 bg-secondary/10 p-3"
                                       >
                                         <span className="block break-all text-muted-foreground">
                                           {photoMeta?.file_name || `Photo ${photoIndex + 1}`}
@@ -450,7 +449,7 @@ export function WorkflowDetailsModal({
 
     return (
       <Card key={step.id}>
-        <CardContent className="pt-4 space-y-4">
+        <CardContent className="pt-card space-y-4">
           {hideDefaultStepDetails?.(workflow!, step) !== true && (
             <>
               <div className="flex flex-wrap items-start justify-between gap-3">
@@ -560,18 +559,13 @@ export function WorkflowDetailsModal({
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="w-[96vw] max-w-5xl max-h-[92vh] overflow-y-auto p-0">
-          <div className="p-4 sm:p-6 space-y-5">
+        <DialogContent className="w-[96vw] max-w-5xl max-h-[92vh] overflow-y-auto" aria-describedby={undefined}>
+          <div className="space-y-5">
           <DialogHeader className="text-left">
             <div className="flex flex-wrap items-center gap-2">
               <DialogTitle>{workflow?.title || "Workflow Details"}</DialogTitle>
               {!loading && workflow && renderTopRightActions ? renderTopRightActions(workflow) : null}
             </div>
-            <DialogDescription>
-              {workflow
-                ? "Review workflow details and each step page."
-                : "Loading workflow details."}
-            </DialogDescription>
           </DialogHeader>
 
           {loading && (
@@ -609,7 +603,7 @@ export function WorkflowDetailsModal({
                   <div className="space-y-2">
                     {workflow.roles.map((role) => (
                       <Card key={role.id}>
-                        <CardContent className="pt-3 space-y-2">
+                        <CardContent className="p-4 space-y-2">
                           <div className="flex flex-wrap items-center justify-between gap-2">
                             <p className="text-sm font-medium">{role.title}</p>
                           </div>
@@ -688,10 +682,9 @@ export function WorkflowDetailsModal({
           }
         }}
       >
-        <DialogContent className="w-[95vw] max-w-3xl">
+        <DialogContent className="w-[95vw] max-w-3xl" aria-describedby={undefined}>
           <DialogHeader>
             <DialogTitle>{expandedPhoto?.label || "Photo Preview"}</DialogTitle>
-            <DialogDescription>Preview of submitted workflow photo evidence.</DialogDescription>
           </DialogHeader>
           {expandedPhoto && photoPreviewURLs[expandedPhoto.id] ? (
             <div className="space-y-3">

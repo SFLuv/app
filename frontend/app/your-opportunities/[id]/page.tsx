@@ -159,7 +159,7 @@ export default function OpportunityDetailPage() {
 
   if (opportunityError) {
     return (
-      <div className="p-8 text-center text-red-500">
+      <div className="text-center text-red-500">
         <p>Error loading opportunity: {opportunityError.message}</p>
         <Button className="mt-4" onClick={() => window.location.reload()}>
           Retry
@@ -182,7 +182,7 @@ export default function OpportunityDetailPage() {
       </div>
 
       <Tabs defaultValue="details" value={activeTab} onValueChange={setActiveTab}>
-        <TabsList className="grid w-full grid-cols-2 mb-6">
+        <TabsList className="grid w-full grid-cols-2 mb-2">
           <TabsTrigger value="details">Opportunity Details</TabsTrigger>
           <TabsTrigger value="volunteers">Registered Volunteers</TabsTrigger>
         </TabsList>
@@ -192,7 +192,6 @@ export default function OpportunityDetailPage() {
             <CardHeader className="flex flex-row items-center justify-between">
               <div>
                 <CardTitle className="text-black dark:text-white">Opportunity Details</CardTitle>
-                <CardDescription>View and edit opportunity information</CardDescription>
               </div>
               <div className="flex gap-2">
                 {isEditing ? (
@@ -210,7 +209,7 @@ export default function OpportunityDetailPage() {
             <CardContent>
               {isEditing ? (
                 <div className="space-y-4">
-                  <div>
+                  <div className="space-y-2">
                     <Label htmlFor="title">Title</Label>
                     <Input
                       id="title"
@@ -220,7 +219,7 @@ export default function OpportunityDetailPage() {
                       className="bg-secondary"
                     />
                   </div>
-                  <div>
+                  <div className="space-y-2">
                     <Label htmlFor="description">Description</Label>
                     <Textarea
                       id="description"
@@ -232,7 +231,7 @@ export default function OpportunityDetailPage() {
                     />
                   </div>
                   <div className="grid grid-cols-2 gap-4">
-                    <div>
+                    <div className="space-y-2">
                       <Label htmlFor="date">Date</Label>
                       <Input
                         id="date"
@@ -243,7 +242,7 @@ export default function OpportunityDetailPage() {
                         className="bg-secondary"
                       />
                     </div>
-                    <div>
+                    <div className="space-y-2">
                       <Label htmlFor="time">Time</Label>
                       <Input
                         id="time"
@@ -255,7 +254,7 @@ export default function OpportunityDetailPage() {
                       />
                     </div>
                   </div>
-                  <div>
+                  <div className="space-y-2">
                     <Label htmlFor="location">Location</Label>
                     <Input
                       id="location"
@@ -268,7 +267,7 @@ export default function OpportunityDetailPage() {
                     <p className="text-xs text-gray-500 mt-1">Location editing is not available in this version</p>
                   </div>
                   <div className="grid grid-cols-2 gap-4">
-                    <div>
+                    <div className="space-y-2">
                       <Label htmlFor="rewardAmount">Reward Amount (SFLuv)</Label>
                       <Input
                         id="rewardAmount"
@@ -279,7 +278,7 @@ export default function OpportunityDetailPage() {
                         className="bg-secondary"
                       />
                     </div>
-                    <div>
+                    <div className="space-y-2">
                       <Label htmlFor="volunteersNeeded">Volunteers Needed</Label>
                       <Input
                         id="volunteersNeeded"
@@ -293,8 +292,8 @@ export default function OpportunityDetailPage() {
                   </div>
                 </div>
               ) : (
-                <div className="space-y-6">
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div className="space-y-4">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     <div className="flex flex-col gap-2">
                       <div className="text-sm font-medium text-gray-500 dark:text-gray-400">Date & Time</div>
                       <div className="flex items-center text-black dark:text-white">
@@ -361,7 +360,7 @@ export default function OpportunityDetailPage() {
             </CardHeader>
             <CardContent>
               {isLoadingVolunteers ? (
-                <div className="space-y-4">
+                <div className="space-y-3">
                   {[...Array(3)].map((_, i) => (
                     <div key={i} className="h-16 bg-gray-200 dark:bg-gray-700 rounded animate-pulse"></div>
                   ))}
@@ -378,7 +377,7 @@ export default function OpportunityDetailPage() {
                   No volunteers have registered for this opportunity yet.
                 </div>
               ) : (
-                <div className="space-y-4">
+                <div className="space-y-3">
                   {volunteers.map((volunteer) => (
                     <div
                       key={volunteer.userId}

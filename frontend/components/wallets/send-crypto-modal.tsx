@@ -6,10 +6,10 @@ import { useEffect, useRef, useState } from "react";
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { InfoTip } from "@/components/ui/info-tip";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -292,6 +292,7 @@ export function SendCryptoModal({
         toast({
           title: "Redeem Code Detected",
           description: "Redirecting to redeem flow...",
+          variant: "info",
         });
         handleClose();
         router.push(`/faucet/redeem?${nextParams.toString()}`);
@@ -1179,13 +1180,10 @@ export function SendCryptoModal({
         return (
           <div className="space-y-3">
             {flowMode !== "scan" && (
-              <div className="text-center pb-2">
-                <h3 className="text-lg font-semibold mb-2">
+              <div className="text-center">
+                <h3 className="text-lg font-semibold">
                   Confirm Transaction
                 </h3>
-                <p className="text-muted-foreground text-sm">
-                  Please review the details before sending
-                </p>
               </div>
             )}
 
@@ -1367,12 +1365,9 @@ export function SendCryptoModal({
               <Send className="h-8 w-8 text-primary animate-pulse" />
             </div>
             <div>
-              <h3 className="text-lg font-semibold mb-2">
+              <h3 className="text-lg font-semibold">
                 Sending Transaction
               </h3>
-              <p className="text-muted-foreground text-sm">
-                Please wait while we process your transaction...
-              </p>
             </div>
           </div>
         );
@@ -1417,13 +1412,13 @@ export function SendCryptoModal({
                   <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
                     Optional Tip
                   </p>
-                  <p className="text-sm font-semibold leading-tight">
+                  <p className="flex items-center gap-2 text-sm font-semibold leading-tight">
                     {tipPrompt.merchantName
                       ? `Tip ${tipPrompt.merchantName}`
                       : "Tip this merchant"}
-                  </p>
-                  <p className="text-xs text-muted-foreground">
-                    Send a separate transfer to the merchant&apos;s tipping wallet.
+                    <InfoTip>
+                      Send a separate transfer to the merchant&apos;s tipping wallet.
+                    </InfoTip>
                   </p>
                 </div>
                 <div className="relative">
@@ -1488,10 +1483,7 @@ export function SendCryptoModal({
               <Send className="h-8 w-8 text-primary animate-pulse" />
             </div>
             <div>
-              <h3 className="text-lg font-semibold mb-2">Sending Tip</h3>
-              <p className="text-muted-foreground text-sm">
-                Submitting the separate tip payment…
-              </p>
+              <h3 className="text-lg font-semibold">Sending Tip</h3>
             </div>
           </div>
         );
@@ -1620,14 +1612,19 @@ export function SendCryptoModal({
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className="mx-auto w-[calc(100vw-1rem)] max-w-md max-h-[calc(100dvh-1rem)] rounded-lg overflow-x-hidden overflow-y-auto p-4 sm:p-6">
-        <DialogHeader className="space-y-2 pb-2">
+      <DialogContent
+        className="mx-auto w-[calc(100vw-1rem)] max-w-md max-h-[calc(100dvh-1rem)] rounded-lg overflow-x-hidden overflow-y-auto"
+        aria-describedby={undefined}
+      >
+        <DialogHeader>
           <DialogTitle className="text-lg sm:text-xl">
-            Send Cryptocurrency
+            <span className="inline-flex items-center gap-1.5">
+              Send Cryptocurrency
+              <InfoTip>
+                Send {tokenSymbol} from your {wallet.name.toUpperCase()} wallet
+              </InfoTip>
+            </span>
           </DialogTitle>
-          <DialogDescription className="text-sm">
-            Send {tokenSymbol} from your {wallet.name.toUpperCase()} wallet
-          </DialogDescription>
         </DialogHeader>
         {renderContent()}
       </DialogContent>

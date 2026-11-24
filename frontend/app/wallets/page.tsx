@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
+import { InfoTip } from "@/components/ui/info-tip"
 import { Plus, Wallet, ArrowRight, RefreshCw } from "lucide-react"
 import { useApp } from "@/context/AppProvider"
 import { AppWallet } from "@/lib/wallets/wallets"
@@ -119,7 +120,7 @@ export default function WalletsPage() {
   }
 
   return (
-    <div className="mx-auto w-full max-w-4xl space-y-4 px-3 pb-6 pt-2 sm:space-y-6 sm:px-6">
+    <div className="mx-auto w-full max-w-4xl space-y-4 sm:space-y-6">
       <ConnectWalletModal
         open={connectWalletModalOpen}
         onOpenChange={() => setConnectWalletModalOpen(!connectWalletModalOpen)}
@@ -139,9 +140,6 @@ export default function WalletsPage() {
           <h1 className="text-2xl font-bold text-black dark:text-white sm:text-3xl">
             Connected Wallets
           </h1>
-          <p className="mt-1 text-sm text-gray-600 dark:text-gray-400 sm:text-base">
-            Manage wallets connected to your SFLuv account
-          </p>
         </div>
 
       </div>
@@ -192,12 +190,10 @@ export default function WalletsPage() {
                 <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-muted">
                   <Wallet className="h-6 w-6 text-muted-foreground" />
                 </div>
-                <h3 className="text-lg font-semibold text-black dark:text-white sm:text-xl">
+                <h3 className="flex items-center gap-2 text-lg font-semibold text-black dark:text-white sm:text-xl">
                   No wallets are currently visible
+                  <InfoTip>Unhide wallets from your account settings to show them here.</InfoTip>
                 </h3>
-                <p className="mt-2 text-sm text-gray-700 dark:text-gray-300 sm:text-base">
-                  Unhide wallets from your account settings to show them here.
-                </p>
               </div>
             </CardContent>
           </Card>

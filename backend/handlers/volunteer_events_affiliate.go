@@ -490,11 +490,12 @@ func (a *AppService) notifyVolunteerEventRequest(ctx context.Context, eventId st
 		payload["url"] = base + "/admin"
 	}
 	a.notify(ctx, Alert{
-		Topic: structs.NotificationTopicEventRequest,
-		Key:   key,
-		Kind:  structs.InternalKindNotice,
-		Title: heading,
-		Body:  body,
+		Topic:    structs.NotificationTopicEventRequest,
+		Key:      key,
+		Kind:     structs.InternalKindNotice,
+		Title:    heading,
+		Subtitle: orgName + " · " + title,
+		Body:     body,
 		Fields: []structs.NotificationField{
 			{Label: "Organization", Value: orgName},
 			{Label: "Event", Value: title},

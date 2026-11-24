@@ -94,7 +94,7 @@ export function TransactionModal({ transaction, wallet, isOpen, onClose }: Trans
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent className="w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] max-h-[90vh] overflow-x-hidden overflow-y-auto p-4 sm:max-w-[600px] sm:p-6">
+      <DialogContent className="w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] max-h-[90vh] overflow-x-hidden overflow-y-auto sm:max-w-[600px]">
         <DialogHeader>
           <DialogTitle className="text-xl text-black dark:text-white sm:text-2xl">Transaction Details</DialogTitle>
           <DialogDescription className="flex flex-wrap items-center gap-2">
@@ -108,7 +108,7 @@ export function TransactionModal({ transaction, wallet, isOpen, onClose }: Trans
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-5">
+        <div className="space-y-6">
           <div className="flex flex-col items-center justify-center rounded-xl border bg-secondary/50 px-3 py-4">
             <h3 className={`text-2xl font-bold sm:text-3xl ${getAmountColor(transaction.amount)}`}>
               {formatAmount(transaction.amount)}
@@ -219,7 +219,7 @@ export function TransactionModal({ transaction, wallet, isOpen, onClose }: Trans
           </div>
         </div>
 
-        <DialogFooter className="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <DialogFooter className="flex flex-col-reverse gap-2 sm:flex-row sm:items-center sm:justify-between">
           <Button
             variant="outline"
             className="w-full bg-secondary text-black hover:bg-secondary/80 dark:text-white sm:w-auto"

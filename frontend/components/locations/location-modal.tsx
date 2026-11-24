@@ -52,7 +52,7 @@ export function LocationModal({ location: selected, isOpen, onClose, isPayEnable
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent className="sm:max-w-[600px] max-h-[90vh] overflow-y-auto space-y-4">
+      <DialogContent className="sm:max-w-[600px] max-h-[90vh] overflow-y-auto">
         <DialogHeader className="space-y-2">
           <div className="flex items-start gap-3">
             <div className="h-12 w-12 shrink-0 overflow-hidden rounded-xl border border-border/60 shadow-sm">
@@ -126,7 +126,7 @@ export function LocationModal({ location: selected, isOpen, onClose, isPayEnable
             </div>
           </TabsContent>
 
-           <TabsContent value="hours" className="space-y-4">
+           <TabsContent value="hours" className="space-y-3">
             <h3 className="font-medium text-black dark:text-white">Hours of Operation</h3>
             <div className="space-y-2">
                 <ul>
@@ -175,7 +175,7 @@ export function LocationModal({ location: selected, isOpen, onClose, isPayEnable
           </TabsContent>
         </Tabs>
 
-        <div className="mt-6 flex flex-wrap justify-end gap-2">
+        <div className="mt-2 flex flex-wrap justify-end gap-2">
           <Button
             onClick={onClose}
             variant="outline"

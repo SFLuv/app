@@ -63,6 +63,11 @@ const (
 	EventConversationRead = "conversation.read"
 	// A notification that would otherwise have been a push.
 	EventNotification = "notification"
+	// A team notification was handled, by anybody: acknowledged, acted on, or
+	// cleared because its condition ended. Carries internal_id and alert_key,
+	// so every app it went to drops it from its list, its banner and the
+	// phone's notification centre at once.
+	EventNotificationResolved = "notification.resolved"
 	// The set of beta features this account holds has changed, so the client can
 	// show or hide a surface without waiting for a relaunch.
 	EventBetaChanged = "beta.changed"

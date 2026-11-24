@@ -1,7 +1,8 @@
 "use client"
 
 import { useEffect, useMemo, useRef, useState } from "react"
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { InfoTip } from "@/components/ui/info-tip"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -78,12 +79,14 @@ export function AddContactModal({ open, onOpenChange, handleAddContact, initialA
     <Dialog open={open} onOpenChange={(open) => {
       onOpenChange(open)
     }}>
-      <DialogContent className="w-[95vw] max-w-md mx-auto max-h-[90vh] rounded-lg overflow-y-auto">
-        <DialogHeader className="space-y-2 pb-2">
-          <DialogTitle className="text-lg sm:text-xl">Add Contact</DialogTitle>
-          <DialogDescription className="text-sm">
-            Create a contact for token transfers and tip address specification.
-          </DialogDescription>
+      <DialogContent className="w-[95vw] max-w-md mx-auto max-h-[90vh] rounded-lg overflow-y-auto" aria-describedby={undefined}>
+        <DialogHeader>
+          <DialogTitle className="text-lg sm:text-xl">
+            <span className="inline-flex items-center gap-1.5">
+              Add Contact
+              <InfoTip>Create a contact for token transfers and tip address specification.</InfoTip>
+            </span>
+          </DialogTitle>
         </DialogHeader>
         {isSubmitting ?
           <div className="min-h-64 flex items-center justify-center">

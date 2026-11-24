@@ -43,7 +43,7 @@ export function DeleteContactModal({ open, onOpenChange, contact, handleDeleteCo
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="w-[95vw] max-w-md mx-auto max-h-[90vh] rounded-lg overflow-y-auto">
-        <DialogHeader className="space-y-2 pb-2">
+        <DialogHeader>
           <DialogTitle className="text-lg sm:text-xl">Delete Contact</DialogTitle>
           <DialogDescription className="text-sm">
             Are you sure you want to delete {contact.name}?

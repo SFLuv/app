@@ -6,6 +6,7 @@ import { ArrowLeft, ExternalLink, Loader2, Pencil, Plus, Star, Trash2, Upload } 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { InfoTip } from "@/components/ui/info-tip"
 import { useAuthFetch } from "./use-auth-fetch"
 import { useNotice } from "./notice"
 import { PastEventGallery, Thumb } from "./past-events-editor"
@@ -74,11 +75,13 @@ export function LiveEventsEditor() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Live events</CardTitle>
-        <CardDescription>
-          The volunteer events people can sign up for right now. Change an event’s cover photos, or add a gallery of what it has looked like
-          in the past. Changes show on the website within a few minutes.
-        </CardDescription>
+        <CardTitle className="flex items-center gap-2">
+          Live events
+          <InfoTip>
+            The volunteer events people can sign up for right now. Change an event’s cover photos, or add a gallery of what it has looked like
+            in the past. Changes show on the website within a few minutes.
+          </InfoTip>
+        </CardTitle>
       </CardHeader>
       <CardContent>
         {events.length === 0 ? (
@@ -136,7 +139,7 @@ function LiveEventDetails({
   return (
     <div className="space-y-6">
       <Card>
-        <CardHeader className="space-y-3">
+        <CardHeader className="gap-3 pb-card">
           <Button variant="ghost" size="sm" className="-ml-2 w-fit" onClick={onBack}>
             <ArrowLeft className="mr-1.5 h-4 w-4" /> All live events
           </Button>
@@ -164,13 +167,15 @@ function LiveEventDetails({
         />
       ) : (
         <Card>
-          <CardHeader className="flex flex-row flex-wrap items-start justify-between gap-4 space-y-0">
+          <CardHeader className="flex flex-row flex-wrap items-start justify-between gap-4 space-y-0 pb-card">
             <div className="max-w-2xl space-y-1.5">
-              <CardTitle>Gallery</CardTitle>
-              <CardDescription>
-                Lots of photos, up to 300, shown under the event so people can see what it’s like.
-                {event.recurrence_summary && " A repeating event keeps the same gallery every time it comes around."}
-              </CardDescription>
+              <CardTitle className="flex items-center gap-2">
+                Gallery
+                <InfoTip>
+                  Lots of photos, up to 300, shown under the event so people can see what it’s like.
+                  {event.recurrence_summary && " A repeating event keeps the same gallery every time it comes around."}
+                </InfoTip>
+              </CardTitle>
             </div>
             <Button disabled={starting} onClick={() => void startGallery()}>
               {starting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Plus className="mr-2 h-4 w-4" />}
@@ -251,15 +256,15 @@ function CoverPhotos({ event, onChange }: { event: SiteLiveEvent; onChange: (eve
         <div className="max-w-2xl space-y-1.5">
           <div className="flex flex-wrap items-center gap-2">
             <CardTitle>Cover photos</CardTitle>
+            <InfoTip>
+              The few photos at the very top of the event’s page. The main cover is also the photo on its tile. For lots of photos, use the
+              gallery below.
+              {event.recurrence_summary && " Changes here carry forward to the next dates of this event."}
+            </InfoTip>
             <Badge variant={room <= 0 ? "secondary" : "outline"}>
               {photos.length} of {MAX_COVER_PHOTOS}
             </Badge>
           </div>
-          <CardDescription>
-            The few photos at the very top of the event’s page. The main cover is also the photo on its tile. For lots of photos, use the
-            gallery below.
-            {event.recurrence_summary && " Changes here carry forward to the next dates of this event."}
-          </CardDescription>
         </div>
         <Button disabled={busy !== null || room <= 0} onClick={() => input.current?.click()}>
           {busy === "add" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Upload className="mr-2 h-4 w-4" />}
@@ -286,7 +291,10 @@ function CoverPhotos({ event, onChange }: { event: SiteLiveEvent; onChange: (eve
           </p>
         )}
         {photos.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No cover photos. The event shows a placeholder until one is added.</p>
+          <p className="flex items-center gap-2 text-sm text-muted-foreground">
+            No cover photos.
+            <InfoTip>The event shows a placeholder until one is added.</InfoTip>
+          </p>
         ) : (
           <ul className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {photos.map((photo, index) => (

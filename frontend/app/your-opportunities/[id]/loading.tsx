@@ -15,7 +15,7 @@ export default function Loading() {
       <div className="w-full">
         <div className="h-10 w-full bg-gray-200 dark:bg-gray-700 rounded-md animate-pulse mb-6"></div>
 
-        <div className="bg-white dark:bg-[#2a2a2a] rounded-lg border p-6">
+        <div className="bg-white dark:bg-[#2a2a2a] rounded-lg border p-card">
           <div className="space-y-6">
             <div className="flex justify-end">
               <div className="h-10 w-28 bg-gray-200 dark:bg-gray-700 rounded-md animate-pulse"></div>

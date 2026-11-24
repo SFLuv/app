@@ -100,7 +100,7 @@ export function MerchantManagement() {
           <Label htmlFor="search" className="text-sm font-medium">
             Search Merchants
           </Label>
-          <div className="relative mt-1">
+          <div className="relative mt-2">
             <Search className="absolute left-2 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-500 dark:text-gray-400" />
             <Input
               id="search"
@@ -116,7 +116,7 @@ export function MerchantManagement() {
             Filter by Status
           </Label>
           <Select value={statusFilter} onValueChange={setStatusFilter}>
-            <SelectTrigger id="status-filter" className="mt-1">
+            <SelectTrigger id="status-filter" className="mt-2">
               <SelectValue placeholder="Filter by status" />
             </SelectTrigger>
             <SelectContent>
@@ -165,7 +165,7 @@ export function MerchantManagement() {
                 </div>
                 <div className="col-span-2">
                   <span
-                    className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getStatusBadgeClass(merchant.status)}`}
+                    className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${getStatusBadgeClass(merchant.status)}`}
                   >
                     {merchantStatusLabels[merchant.status]}
                   </span>

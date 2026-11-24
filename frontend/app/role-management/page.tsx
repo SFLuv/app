@@ -41,12 +41,9 @@ export default function RoleManagementPage() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-section">
       <div>
         <h1 className="text-3xl font-bold text-black dark:text-white">Role Management</h1>
-        <p className="text-gray-600 dark:text-gray-400 mt-1">
-          Manage user roles and permissions across the SFLuv platform
-        </p>
       </div>
 
       <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">

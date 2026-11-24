@@ -242,10 +242,11 @@ func (a *AppService) alertW9SupportNeeded(ctx context.Context, userID string, ta
 	// One live alert per person and year: a third failure refreshes the count
 	// rather than asking again.
 	a.notify(ctx, Alert{
-		Topic: structs.NotificationTopicW9,
-		Key:   fmt.Sprintf("w9_support:%s:%d", userID, taxYear),
-		Kind:  structs.InternalKindNotice,
-		Title: fmt.Sprintf("W-9 needs help: %s failed the IRS check %d times", name, failures),
+		Topic:    structs.NotificationTopicW9,
+		Key:      fmt.Sprintf("w9_support:%s:%d", userID, taxYear),
+		Kind:     structs.InternalKindNotice,
+		Title:    fmt.Sprintf("W-9 needs help: %s failed the IRS check %d times", name, failures),
+		Subtitle: name,
 		Body: fmt.Sprintf("%s's W-9 for %d has failed the IRS TIN match %d times, so the app has stopped letting them retry on their own and asked them to contact us through %s. Find out what differs from their Social Security card (or the business's EIN letter), then send a new form from the admin panel's Request a W-9 card. The form they submitted is in the TaxBandits console; this carries no taxpayer number.",
 			name, taxYear, failures, w9SupportPage),
 		Fields: []structs.NotificationField{
@@ -257,7 +258,7 @@ func (a *AppService) alertW9SupportNeeded(ctx context.Context, userID string, ta
 		Payload: payload,
 		// The body names a person and their tax trouble, so a team chat gets
 		// only that somebody needs W-9 help.
-		ChatLine: fmt.Sprintf("W-9 needs help: %s, %d failed IRS checks for %d", name, failures, taxYear),
+		ChatLine: fmt.Sprintf("%s\nFailed IRS checks: %d\nTax year: %d", name, failures, taxYear),
 	})
 }
 

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Loader2, CheckCircle2, AlertTriangle } from "lucide-react"
 import { BACKEND } from "@/lib/constants"
@@ -65,11 +65,10 @@ export default function VerifyEmailPage() {
   }, [searchParams])
 
   return (
-    <div className="container mx-auto p-4 min-h-[60vh] flex items-center justify-center">
+    <div className="container mx-auto min-h-[60vh] flex items-center justify-center">
       <Card className="w-full max-w-xl">
         <CardHeader>
           <CardTitle>Email Verification</CardTitle>
-          <CardDescription>Confirm your email address to use it for notifications and role requests.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           {state === "loading" && (

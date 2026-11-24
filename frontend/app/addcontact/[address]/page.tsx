@@ -7,6 +7,7 @@ import { AlertTriangle, CheckCircle, Contact, Loader2 } from "lucide-react"
 import { AddContactModal } from "@/components/contacts/add-contact-modal"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { InfoTip } from "@/components/ui/info-tip"
 import { useApp } from "@/context/AppProvider"
 import { useContacts } from "@/context/ContactsProvider"
 
@@ -45,7 +46,7 @@ export default function AddContactLinkPage() {
 
   if (!normalizedAddress) {
     return (
-      <main className="mx-auto flex min-h-[70vh] max-w-lg items-center justify-center px-4">
+      <main className="mx-auto flex min-h-[70vh] max-w-lg items-center justify-center">
         <Card className="w-full">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
@@ -72,14 +73,14 @@ export default function AddContactLinkPage() {
 
   if (status === "unauthenticated") {
     return (
-      <main className="mx-auto flex min-h-[70vh] max-w-lg items-center justify-center px-4">
+      <main className="mx-auto flex min-h-[70vh] max-w-lg items-center justify-center">
         <Card className="w-full">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <Contact className="h-5 w-5 text-[#eb6c6c]" />
               Add SFLuv contact
+              <InfoTip>Sign in to save {shortAddress(normalizedAddress)} to your SFLuv contacts.</InfoTip>
             </CardTitle>
-            <CardDescription>Sign in to save {shortAddress(normalizedAddress)} to your SFLuv contacts.</CardDescription>
           </CardHeader>
           <CardContent>
             <Button onClick={() => void login()}>Sign in to add contact</Button>
@@ -90,7 +91,7 @@ export default function AddContactLinkPage() {
   }
 
   return (
-    <main className="mx-auto flex min-h-[70vh] max-w-lg items-center justify-center px-4">
+    <main className="mx-auto flex min-h-[70vh] max-w-lg items-center justify-center">
       <Card className="w-full">
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
@@ -100,12 +101,12 @@ export default function AddContactLinkPage() {
               <Contact className="h-5 w-5 text-[#eb6c6c]" />
             )}
             {existingContact ? "Contact already saved" : "Add SFLuv contact"}
+            <InfoTip>
+              {existingContact
+                ? `${existingContact.name} is already saved in your contacts.`
+                : `Save ${shortAddress(normalizedAddress)} as a contact for future payments.`}
+            </InfoTip>
           </CardTitle>
-          <CardDescription>
-            {existingContact
-              ? `${existingContact.name} is already saved in your contacts.`
-              : `Save ${shortAddress(normalizedAddress)} as a contact for future payments.`}
-          </CardDescription>
         </CardHeader>
         <CardContent className="flex gap-3">
           {existingContact ? null : <Button onClick={() => setModalOpen(true)}>Add contact</Button>}

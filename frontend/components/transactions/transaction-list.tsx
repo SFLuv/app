@@ -124,9 +124,6 @@ export function TransactionList({ transactions, onSelectTransaction, wallet }: T
         {filteredTransactions.length === 0 ? (
           <div className="text-center py-12">
             <h3 className="text-xl font-medium text-black dark:text-white">No transactions found</h3>
-            <p className="text-gray-600 dark:text-gray-400 mt-2">
-              Try adjusting your search or filters to find transactions
-            </p>
           </div>
         ) : (
           filteredTransactions.map((transaction) => {

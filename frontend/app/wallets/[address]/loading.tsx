@@ -25,7 +25,7 @@ export default function WalletDetailsLoading() {
         </div>
       </div>
 
-      <div className="container mx-auto p-4 space-y-6 max-w-2xl">
+      <div className="container mx-auto px-3 sm:px-4 pt-4 sm:pt-6 space-y-4 sm:space-y-6 max-w-2xl">
         {/* Balance Card Skeleton */}
         <Card>
           <CardHeader>
@@ -79,7 +79,7 @@ export default function WalletDetailsLoading() {
 
         {/* Transaction History Skeleton */}
         <Card>
-          <CardHeader className="pb-3">
+          <CardHeader>
             <div className="flex items-center justify-between">
               <div>
                 <Skeleton className="h-6 w-32 mb-2" />

@@ -410,6 +410,7 @@ func NewServerHandler(ctx context.Context, pools *DBPools, appLogger *logger.Log
 	// can be built first.
 	a.SetNotificationService(notificationSvc)
 	notificationSvc.SetPusher(a.PushToUser)
+	notificationSvc.SetAnnouncer(a.AnnounceNotification, a.AnnounceNotificationResolved)
 	notificationSvc.SetChatPoster(a.PostSupportBotLine)
 
 	// The health poller alerts the dev set, and its acknowledge button asks the

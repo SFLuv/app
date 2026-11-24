@@ -4,6 +4,7 @@ import { useEffect, useState } from "react"
 import { Loader2 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
+import { InfoTip } from "@/components/ui/info-tip"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { useApp } from "@/context/AppProvider"
@@ -59,13 +60,15 @@ export function MerchantPinReset({ userId }: { userId: string }) {
 
   return (
     <div className="space-y-3 rounded-md border p-4">
-      <h4 className="text-sm font-semibold">Merchant mode PIN</h4>
-      <p className="text-xs text-muted-foreground">
-        For a merchant who forgot their PIN. This sets a new PIN without the old one and clears any lockout.
-        Leave the box empty to generate a random PIN.
-      </p>
+      <h4 className="flex items-center gap-2 text-sm font-semibold">
+        Merchant mode PIN
+        <InfoTip>
+          For a merchant who forgot their PIN. This sets a new PIN without the old one and clears any lockout.
+          Leave the box empty to generate a random PIN.
+        </InfoTip>
+      </h4>
       <div className="flex flex-wrap items-end gap-2">
-        <div className="space-y-1">
+        <div className="space-y-2">
           <Label htmlFor={inputId}>New PIN (optional)</Label>
           <Input
             id={inputId}

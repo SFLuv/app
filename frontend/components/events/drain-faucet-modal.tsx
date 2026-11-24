@@ -68,7 +68,7 @@ export function DrainFaucetModal({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="mx-auto max-h-[90vh] w-[95vw] max-w-md overflow-y-auto">
-        <DialogHeader className="space-y-2 pb-2">
+        <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-lg text-destructive sm:text-xl">
             <AlertTriangle className="h-5 w-5" />
             Drain faucet
@@ -93,7 +93,7 @@ export function DrainFaucetModal({
             </p>
           </div>
 
-          <div className="space-y-1.5">
+          <div className="space-y-2">
             <Label htmlFor="drain-confirm">
               Type <span className="font-mono font-semibold text-foreground">{CONFIRM_WORD}</span> to confirm
             </Label>

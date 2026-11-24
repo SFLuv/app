@@ -19,6 +19,7 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { InfoTip } from "@/components/ui/info-tip"
 import { useApp } from "@/context/AppProvider"
 import { useChainConfig } from "@/context/ChainConfigProvider"
 import type {
@@ -247,10 +248,12 @@ function MetricTile({
 
   return (
     <Card>
-      <CardHeader className="flex flex-row items-start justify-between gap-3 space-y-0 pb-3">
+      <CardHeader className="flex flex-row items-start justify-between gap-3 space-y-0">
         <div className="min-w-0">
-          <CardTitle className="text-sm font-medium">{metric.label}</CardTitle>
-          <CardDescription className="mt-1 line-clamp-2 text-xs">{definition}</CardDescription>
+          <CardTitle className="flex items-center gap-2 text-sm font-medium">
+            {metric.label}
+            {definition && <InfoTip>{definition}</InfoTip>}
+          </CardTitle>
         </div>
         <div className="flex shrink-0 items-center gap-1">
           <Icon className="h-4 w-4 text-primary" />
@@ -327,7 +330,7 @@ export function AdminAnalyticsPanel() {
   if (error) {
     return (
       <Card className="border-red-200 bg-red-50">
-        <CardHeader>
+        <CardHeader className="pb-card">
           <CardTitle className="text-red-700">Analytics unavailable</CardTitle>
           <CardDescription className="text-red-600">{error}</CardDescription>
         </CardHeader>
@@ -344,13 +347,12 @@ export function AdminAnalyticsPanel() {
   return (
     <div className="space-y-6">
       <Card className="border-primary/20 bg-primary/5">
-        <CardHeader className="gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <CardHeader className="gap-4 pb-card sm:flex-row sm:items-start sm:justify-between">
           <div>
             <CardTitle className="flex items-center gap-2">
               <Activity className="h-5 w-5 text-primary" />
               Analytics
             </CardTitle>
-            <CardDescription>Glossary-based internal reporting for SFLuv circulation, rewards, payments, redemptions, and volunteering.</CardDescription>
           </div>
           <div className="flex flex-col gap-2 sm:items-end">
             <Button onClick={exportCsv}>
@@ -365,8 +367,10 @@ export function AdminAnalyticsPanel() {
       <Card>
         <CardHeader className="gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <CardTitle>Current Circulating {chainConfig.tokenSymbol}</CardTitle>
-            <CardDescription>All-time total {chainConfig.tokenSymbol} distributed through rewards minus all-time redemptions.</CardDescription>
+            <CardTitle className="flex items-center gap-2">
+              Current Circulating {chainConfig.tokenSymbol}
+              <InfoTip>All-time total {chainConfig.tokenSymbol} distributed through rewards minus all-time redemptions.</InfoTip>
+            </CardTitle>
           </div>
           <Button
             type="button"
@@ -384,8 +388,10 @@ export function AdminAnalyticsPanel() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Period Metrics</CardTitle>
-          <CardDescription>Weeks run Sunday through Saturday; months and years use calendar boundaries.</CardDescription>
+          <CardTitle className="flex items-center gap-2">
+            Period Metrics
+            <InfoTip>Weeks run Sunday through Saturday; months and years use calendar boundaries.</InfoTip>
+          </CardTitle>
         </CardHeader>
         <CardContent className="space-y-5">
           <div className="flex flex-wrap gap-2">
@@ -418,8 +424,10 @@ export function AdminAnalyticsPanel() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Monthly Trend</CardTitle>
-          <CardDescription>Last 12 calendar months using the same glossary calculations.</CardDescription>
+          <CardTitle className="flex items-center gap-2">
+            Monthly Trend
+            <InfoTip>Last 12 calendar months using the same glossary calculations.</InfoTip>
+          </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           {analytics.monthly_trend.map((point) => {
@@ -447,7 +455,7 @@ export function AdminAnalyticsPanel() {
         </CardContent>
       </Card>
 
-      <div className="grid gap-6 xl:grid-cols-2">
+      <div className="grid gap-4 sm:gap-6 xl:grid-cols-2">
         <DefinitionList title="Metric Definitions" items={analytics.metric_definitions} />
         <DefinitionList title="Glossary" items={analytics.glossary} />
       </div>

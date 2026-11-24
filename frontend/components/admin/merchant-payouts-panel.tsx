@@ -6,6 +6,7 @@ import { ExternalLink, Loader2, RefreshCw } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { InfoTip } from "@/components/ui/info-tip"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { useApp } from "@/context/AppProvider"
@@ -111,7 +112,7 @@ export function MerchantPayoutsPanel() {
       if (res.status === 409) {
         const body = await res.json()
         setCandidates(body?.candidates || [])
-        toast({ title: "Several accounts use that email", description: "Pick the right one below." })
+        toast({ title: "Several accounts use that email", description: "Pick the right one below.", variant: "warning" })
         return
       }
       if (!res.ok) {
@@ -188,9 +189,6 @@ export function MerchantPayoutsPanel() {
       <div className="flex items-center justify-between gap-3">
         <div>
           <h2 className="text-xl font-semibold">Merchant payouts</h2>
-          <p className="text-sm text-muted-foreground">
-            Bridge business verification, linked banks, and where each location&apos;s unwraps are sent.
-          </p>
         </div>
         <Button variant="outline" size="sm" onClick={() => void load()} disabled={loading}>
           {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
@@ -200,22 +198,24 @@ export function MerchantPayoutsPanel() {
 
       {disabledReason ? (
         <Card>
-          <CardContent className="py-6 text-sm text-muted-foreground">{disabledReason}</CardContent>
+          <CardContent className="pt-card text-sm text-muted-foreground">{disabledReason}</CardContent>
         </Card>
       ) : null}
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Attach an existing Bridge customer</CardTitle>
-          <CardDescription>
-            For a business that was verified outside the app. Enter the merchant&apos;s email and the Bridge customer
-            id: this links the customer to their account, pulls in their linked banks, and provisions a payout address
-            for every approved location.
-          </CardDescription>
+          <CardTitle className="flex items-center gap-2 text-base">
+            Attach an existing Bridge customer
+            <InfoTip>
+              For a business that was verified outside the app. Enter the merchant&apos;s email and the Bridge customer
+              id: this links the customer to their account, pulls in their linked banks, and provisions a payout address
+              for every approved location.
+            </InfoTip>
+          </CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="grid gap-3 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
-            <div className="space-y-1">
+            <div className="space-y-2">
               <Label htmlFor="attach-email">Merchant email</Label>
               <Input
                 id="attach-email"
@@ -230,7 +230,7 @@ export function MerchantPayoutsPanel() {
                 disabled={showOwnerId}
               />
             </div>
-            <div className="space-y-1">
+            <div className="space-y-2">
               <Label htmlFor="attach-customer">Bridge customer id</Label>
               <Input
                 id="attach-customer"
@@ -277,7 +277,7 @@ export function MerchantPayoutsPanel() {
             {showOwnerId ? "Use email instead" : "Attach by owner id instead"}
           </button>
           {showOwnerId ? (
-            <div className="space-y-1">
+            <div className="space-y-2">
               <Label htmlFor="attach-owner">Owner user id (did:privy:…)</Label>
               <Input
                 id="attach-owner"
@@ -294,8 +294,11 @@ export function MerchantPayoutsPanel() {
 
       {businesses.length === 0 && !loading ? (
         <Card>
-          <CardContent className="py-6 text-sm text-muted-foreground">
-            No business has started Bridge verification yet. Approving a location starts it automatically.
+          <CardContent className="pt-card text-sm text-muted-foreground">
+            <span className="inline-flex items-center gap-1.5">
+              No business has started Bridge verification yet.
+              <InfoTip>Approving a location starts it automatically.</InfoTip>
+            </span>
           </CardContent>
         </Card>
       ) : null}
@@ -304,7 +307,7 @@ export function MerchantPayoutsPanel() {
         const kyb = kybStatusLabel(business.profile.kyb_status)
         return (
           <Card key={business.profile.owner_id}>
-            <CardHeader className="space-y-2">
+            <CardHeader className="gap-2">
               <div className="flex flex-wrap items-center gap-2">
                 <CardTitle className="text-base">
                   {business.locations[0]?.name || "Business"}
@@ -324,7 +327,10 @@ export function MerchantPayoutsPanel() {
               <div>
                 <div className="mb-1 text-sm font-medium">Linked banks</div>
                 {business.bank_accounts.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">None yet. The merchant connects one from Settings.</p>
+                  <p className="flex items-center gap-2 text-sm text-muted-foreground">
+                    None yet.
+                    <InfoTip>The merchant connects one from Settings.</InfoTip>
+                  </p>
                 ) : (
                   <ul className="space-y-1 text-sm">
                     {business.bank_accounts.map((bank) => (
@@ -415,8 +421,10 @@ export function MerchantPayoutsPanel() {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Recent unwraps</CardTitle>
-          <CardDescription>Every unwrap recorded by the web app, with its status from Bridge.</CardDescription>
+          <CardTitle className="flex items-center gap-2 text-base">
+            Recent unwraps
+            <InfoTip>Every unwrap recorded by the web app, with its status from Bridge.</InfoTip>
+          </CardTitle>
         </CardHeader>
         <CardContent>
           {unwraps.length === 0 ? (
